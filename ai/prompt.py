@@ -115,6 +115,7 @@ def _pct(v: float | None) -> str:
 
 def format_enrichment(sig: dict) -> str:
     """Build a compact text block summarising enrichment data for the prompt."""
+    headlines = sig.get("news_headlines") or []
     lines = [
         "FUNDAMENTALS",
         f"  EPS growth   QoQ: {_pct(sig.get('eps_qoq'))}   YoY: {_pct(sig.get('eps_yoy'))}",
@@ -122,12 +123,18 @@ def format_enrichment(sig: dict) -> str:
         f"  Sales QoQ:   {_pct(sig.get('sales_qoq'))}",
         f"  Earnings in: {sig['earnings_days_out']}d" if sig.get("earnings_days_out") else "  Earnings:    n/a",
         "",
+        "RECENT NEWS HEADLINES",
+    ]
+    if headlines:
+        lines += [f"  - {h}" for h in headlines]
+    else:
+        lines.append("  n/a")
+    lines += [
+        "",
         "SENTIMENT",
-        f"  WSB mentions (24h):          {sig.get('wsb_mentions') or 'n/a'}",
-        f"  r/Daytrading mentions (24h): {sig.get('daytrading_mentions') or 'n/a'}",
-        f"  Insider buy:                 {str(sig['insider_buy_days_ago']) + 'd ago' if sig.get('insider_buy_days_ago') else 'none recent'}",
-        f"  News sentiment (-1 to +1):   {sig['news_sentiment']:+.2f}" if sig.get("news_sentiment") is not None else "  News sentiment:              n/a",
-        f"  Google Trends (WoW chg):     {sig['google_trends_chg']:+.0%}" if sig.get("google_trends_chg") is not None else "  Google Trends:               n/a",
+        f"  Insider buy:        {str(sig['insider_buy_days_ago']) + 'd ago' if sig.get('insider_buy_days_ago') else 'none recent'}",
+        f"  News sentiment:     {sig['news_sentiment']:+.2f}" if sig.get("news_sentiment") is not None else "  News sentiment:     n/a",
+        f"  Google Trends WoW:  {sig['google_trends_chg']:+.0%}" if sig.get("google_trends_chg") is not None else "  Google Trends WoW:  n/a",
     ]
     return "\n".join(lines)
 

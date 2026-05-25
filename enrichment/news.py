@@ -73,10 +73,11 @@ def get_news_enrichment(symbol: str, lookback_days: int = 7) -> dict:
             continue
 
     if not recent:
-        return {"news_count_7d": 0, "news_sentiment": None}
+        return {"news_count_7d": 0, "news_sentiment": None, "news_headlines": []}
 
     sentiment = round(sum(_score_title(t) for t in recent) / len(recent), 3)
     return {
         "news_count_7d":  len(recent),
         "news_sentiment": sentiment,
+        "news_headlines": recent[:5],
     }

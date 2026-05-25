@@ -191,8 +191,6 @@ footer .css-164nlkn, footer .viewerBadge_container__1QSob,
 footer .viewerBadge_link__1S137 { visibility: hidden !important; }
 section[data-testid="stBottom"] { visibility: visible !important; }
 
-/* Hide Streamlit's built-in image fullscreen button */
-button[title="View fullscreen"] { display: none !important; }
 
 
 /* Market overview button — centered glow */
@@ -283,20 +281,8 @@ def fetch_live_enrichment(symbol: str, trends_keyword: str) -> dict:
     except Exception:
         pass
 
-    # Reddit mentions (requires credentials in .env)
-    try:
-        from enrichment.reddit import get_mention_counts
-        counts = get_mention_counts(symbol)
-        wsb = counts.get("wallstreetbets")
-        dtr = counts.get("Daytrading")
-        if wsb is not None:
-            result["wsb_mentions"] = wsb if wsb > 0 else None
-        if dtr is not None:
-            result["daytrading_mentions"] = dtr if dtr > 0 else None
-    except Exception:
-        pass
+    # Reddit and StockTwits removed (no free API access)
 
-    # StockTwits — API now requires paid plan, disabled
 
     # News activity (yfinance, no credentials)
     try:
@@ -306,6 +292,8 @@ def fetch_live_enrichment(symbol: str, trends_keyword: str) -> dict:
             result["news_sentiment"] = news["news_sentiment"]
         if news.get("news_count_7d") is not None:
             result["news_count_7d"] = news["news_count_7d"]
+        if news.get("news_headlines"):
+            result["news_headlines"] = news["news_headlines"]
     except Exception:
         pass
 
@@ -765,59 +753,49 @@ if _sig_date_str:
     except Exception:
         pass
 
-# Chart — use stored path from pipeline run, fall back to None
-chart_path = sig.get("chart_image_path") or None
-
-# Chart-switching buttons for multi-strategy stocks
+# Chart display — full width always; side-by-side for 2; arrows for 3+
+chart_path = sig.get("chart_image_path") or None   # kept as default for AI assessment
 _strats = sig.get("strategies_fired", [])
-_chart_strat_key = f"chart_strat_{sig['symbol']}_{sig.get('date', '')}"
-if _chart_strat_key not in st.session_state:
-    st.session_state[_chart_strat_key] = None
-_per_strat_charts = [s for s in _strats if sig.get(f"chart_{s}")]
-if len(_per_strat_charts) >= 1 and chart_path:
-    _scols = st.columns(len(_per_strat_charts) + 1)
-    _cur_sel = st.session_state.get(_chart_strat_key)
-    with _scols[0]:
-        if st.button("Combined", key=f"cbtn_main_{sig['symbol']}", use_container_width=True,
-                     type="primary" if _cur_sel is None else "secondary"):
-            st.session_state[_chart_strat_key] = None
-            st.rerun()
-    for _bi, _strat in enumerate(_per_strat_charts):
-        with _scols[_bi + 1]:
-            if st.button(BADGE_LABELS.get(_strat, _strat), key=f"cbtn_{_strat}_{sig['symbol']}",
-                         use_container_width=True,
-                         type="primary" if _cur_sel == _strat else "secondary"):
-                st.session_state[_chart_strat_key] = _strat
-                st.rerun()
-    _sel = st.session_state.get(_chart_strat_key)
-    if _sel and sig.get(f"chart_{_sel}"):
-        chart_path = sig.get(f"chart_{_sel}")
+_chart_label = "Pipeline chart" if _data_source == "live" else "Synthetic chart — run pipeline to generate real charts"
+st.caption(_chart_label)
 
-_ck = f"chart_big_{sig['symbol']}"
-_chart_big = st.session_state.get(_ck, False)
+_all_charts: list[tuple[str, str]] = []
+if chart_path:
+    _all_charts.append(("Combined", chart_path))
+for _cs in _strats:
+    _cp = sig.get(f"chart_{_cs}")
+    if _cp and _cp != chart_path:
+        _all_charts.append((BADGE_LABELS.get(_cs, _cs), _cp))
 
-_c1, _c2 = st.columns([9, 2])
-with _c1:
-    _chart_label = "Pipeline chart" if _data_source == "live" else "Synthetic chart — run pipeline to generate real charts"
-    st.caption(_chart_label)
-with _c2:
-    _btn_label = "✕ Collapse" if _chart_big else "⤢ Full chart"
-    if st.button(_btn_label, key=f"chbtn_{sig['symbol']}", use_container_width=True,
-                 help="Expand chart to full width / collapse back to preview"):
-        st.session_state[_ck] = not _chart_big
-        st.rerun()
-
-_chart_is_url = chart_path and chart_path.startswith("http")
-_chart_is_local = chart_path and not _chart_is_url and Path(chart_path).exists()
-
-if _chart_is_url or _chart_is_local:
-    if _chart_big:
-        st.image(chart_path, use_container_width=True)
-    else:
-        st.image(chart_path, width=650)
+if not _all_charts:
+    st.info("Chart not available — run the pipeline first.")
+elif len(_all_charts) == 1:
+    st.image(_all_charts[0][1], use_container_width=True)
+elif len(_all_charts) == 2:
+    _cc1, _cc2 = st.columns(2)
+    for _col, (_lbl, _pth) in zip([_cc1, _cc2], _all_charts):
+        with _col:
+            st.caption(_lbl)
+            st.image(_pth, use_container_width=True)
 else:
-    st.info("Chart not available.")
-
+    _nav_key = f"chart_nav_{sig['symbol']}_{sig.get('date', '')}"
+    if _nav_key not in st.session_state:
+        st.session_state[_nav_key] = 0
+    _nav_idx = st.session_state[_nav_key] % len(_all_charts)
+    _nav_lbl, _nav_pth = _all_charts[_nav_idx]
+    chart_path = _nav_pth
+    _na, _nb, _nc = st.columns([1, 8, 1])
+    with _na:
+        if st.button("◄", key=f"cprev_{sig['symbol']}", use_container_width=True):
+            st.session_state[_nav_key] = (_nav_idx - 1) % len(_all_charts)
+            st.rerun()
+    with _nb:
+        st.caption(f"{_nav_lbl}  ·  {_nav_idx + 1} / {len(_all_charts)}")
+    with _nc:
+        if st.button("►", key=f"cnext_{sig['symbol']}", use_container_width=True):
+            st.session_state[_nav_key] = (_nav_idx + 1) % len(_all_charts)
+            st.rerun()
+    st.image(_nav_pth, use_container_width=True)
 # Info strips below chart
 rr = display.get("risk_reward")
 rs = display.get("rs_rank")
@@ -852,6 +830,18 @@ with _info_r:
         ("News 7d",      f'<span class="white">{_nc}</span>' if _nc else '<span class="grey">—</span>'),
         ("Google trend", _trend(display.get("google_trends_chg"))),
     ]), unsafe_allow_html=True)
+    _headlines = display.get("news_headlines") or []
+    if _headlines:
+        _hl_html = "".join(
+            f'<div style="color:#8b949e;font-size:11px;padding:3px 0;border-bottom:'
+            f'1px solid #21262d20;line-height:1.4">{h}</div>'
+            for h in _headlines
+        )
+        st.markdown(
+            f'<div style="margin-top:6px;padding:6px 10px;background:#161b22;'
+            f'border-radius:6px;border:1px solid #21262d">{_hl_html}</div>',
+            unsafe_allow_html=True,
+        )
 
 notes = display.get("pattern_notes", "")
 if notes:
@@ -865,6 +855,28 @@ if notes:
 # -------------------------------------------------------------------------
 # Theme Classification
 # -------------------------------------------------------------------------
+
+# If theme wasn't stored in DB, classify on demand via Haiku (cached per signal)
+if not sig.get("theme_name"):
+    _tk = f"theme_{sig['symbol']}"
+    if _tk not in st.session_state:
+        _hot = get_hot_themes()
+        if _hot.get("themes"):
+            try:
+                from themes.classifier import classify_stock_theme
+                st.session_state[_tk] = classify_stock_theme(
+                    symbol=sig["symbol"],
+                    company_name=sig.get("company_name", sig["symbol"]),
+                    sector="", description="", themes=_hot,
+                )
+            except Exception:
+                st.session_state[_tk] = {}
+        else:
+            st.session_state[_tk] = {}
+    _live_theme = st.session_state.get(_tk, {})
+    if _live_theme.get("theme_name"):
+        sig = {**sig, **_live_theme}
+        display = {**display, **_live_theme}
 
 if sig.get("theme_name"):
     _t_m = (sig.get("theme_momentum") or "").lower()
