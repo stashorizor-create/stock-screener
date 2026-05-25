@@ -881,83 +881,81 @@ if sig.get("theme_name"):
     )
 
 # -------------------------------------------------------------------------
-# AI Assessment
+# Company & Market Context
 # -------------------------------------------------------------------------
 
-st.markdown('<div class="strip-label" style="margin-top:14px">AI Assessment</div>', unsafe_allow_html=True)
+st.markdown('<div class="strip-label" style="margin-top:14px">Company &amp; Market Context</div>', unsafe_allow_html=True)
 
-_AI_KEY = f"ai_result_{sig['symbol']}"
-if _AI_KEY not in st.session_state:
-    st.session_state[_AI_KEY] = None
+_CONTEXT_KEY = f"context_{sig['symbol']}_{sig.get('date', '')}"
+if _CONTEXT_KEY not in st.session_state:
+    st.session_state[_CONTEXT_KEY] = None
 
-col_btn, col_status = st.columns([1, 3])
-with col_btn:
-    run_ai = st.button("Run AI assessment", key=f"ai_btn_{sig['symbol']}", use_container_width=True)
+_run_context = st.button(
+    "📰  Analyse company + news", key=f"ctx_btn_{sig['symbol']}", use_container_width=False
+)
 
-if run_ai:
-    _chart_ok = chart_path and (
-        chart_path.startswith("http") or Path(chart_path).exists()
+if _run_context:
+    _headlines = display.get("news_headlines") or []
+    _theme_nm  = sig.get("theme_name") or "no specific theme identified"
+    _theme_nar = sig.get("theme_narrative") or ""
+    _eps_yoy   = display.get("eps_yoy")
+    _rev_yoy   = display.get("revenue_yoy")
+    _earn_out  = display.get("earnings_days_out")
+
+    def _fmt_plain(v):
+        return f"{v:+.0%}" if v is not None else "n/a"
+
+    _macro_prompt = (
+        f"I'm considering a swing trade in {sig['symbol']} "
+        f"({sig.get('company_name', sig['symbol'])}, {sig.get('exchange', '?')}, "
+        f"RS rank {sig.get('rs_rank', '?')}th percentile).\n\n"
+        f"Theme: {_theme_nm}" + (f" — {_theme_nar}" if _theme_nar else "") + "\n"
+        f"Fundamentals: EPS YoY {_fmt_plain(_eps_yoy)}, Revenue YoY {_fmt_plain(_rev_yoy)}"
+        + (f", earnings in {_earn_out}d" if _earn_out else "") + "\n"
     )
-    if not _chart_ok:
-        with col_status:
-            st.warning("Chart not available — run the pipeline first.")
-    else:
-        try:
-            from ai.agent import assess_signal as _assess
-            with st.spinner("Asking Claude to review the chart…"):
-                result = _assess(display, chart_path)
-            if result is None:
-                with col_status:
-                    st.warning("Assessment unavailable — check ANTHROPIC_API_KEY in .env")
-            else:
-                st.session_state[_AI_KEY] = result
-        except Exception as _exc:
-            with col_status:
-                st.error(f"AI assessment failed: {_exc}")
+    if _headlines:
+        _macro_prompt += "Recent news:\n" + "\n".join(f"  • {h}" for h in _headlines) + "\n"
+    _macro_prompt += (
+        "\nAs a swing trading analyst, discuss this stock:\n"
+        "1. What macro or sector forces are acting on this stock right now — tailwinds or headwinds?\n"
+        "2. What does the news tell us about near-term catalysts or risks?\n"
+        "3. Does the fundamental picture support a breakout, or are there concerns?\n"
+        "4. Anything in the macro environment I should know before entering?\n"
+        "Be specific and direct. Don’t describe chart patterns — I can see the chart. "
+        "Focus on the story behind the stock and whether now is the right time."
+    )
 
-ai = st.session_state[_AI_KEY]
+    try:
+        with st.spinner("Asking Claude…"):
+            _context_reply = _call_claude_chat(display, None, [], _macro_prompt)
+        st.session_state[_CONTEXT_KEY] = _context_reply
+        _ck = f"chat_{sig['symbol']}_{sig.get('date', '')}"
+        if _ck not in st.session_state:
+            st.session_state[_ck] = []
+        if not st.session_state[_ck]:
+            st.session_state[_ck] = [
+                {"role": "user", "content": "Give me a macro and fundamental analysis of this stock."},
+                {"role": "assistant", "content": _context_reply},
+            ]
+        st.rerun()
+    except Exception as _exc:
+        st.error(f"Analysis failed: {_exc}")
 
-if ai is None:
+_context_result = st.session_state[_CONTEXT_KEY]
+if _context_result is None:
     st.markdown(
         '<div style="color:#484f58;font-size:12px;padding:8px 0">'
-        'Click the button above to run a visual chart assessment via Claude.</div>',
+        'Click to get a macro &amp; news analysis from Claude — then continue the discussion in the chat below.</div>',
         unsafe_allow_html=True,
     )
 else:
-    pq = ai["pattern_quality"]
-    pq_color = "#3fb950" if pq >= 7 else ("#e3b341" if pq >= 5 else "#f85149")
-    conf = ai["confidence_score"]
-    conf_color = "#3fb950" if conf >= 75 else ("#e3b341" if conf >= 60 else "#f85149")
-
-    st.markdown(strip_html([
-        ("Pattern quality",
-         f'<span style="color:{pq_color};font-weight:700">{pq}/10</span>'),
-        ("AI confidence",
-         f'<span style="color:{conf_color};font-weight:700">{conf:.0f}</span>'
-         f'<span style="color:#484f58;font-size:10px">/100</span>'),
-        ("Tokens used",
-         f'<span class="grey" style="font-size:12px">'
-         f'{ai["input_tokens"]+ai["output_tokens"]:,}</span>'),
-    ]), unsafe_allow_html=True)
-
     st.markdown(
         f'<div style="margin-top:8px;padding:10px 14px;background:#161b22;'
         f'border-radius:6px;border:1px solid #21262d;font-size:13px;line-height:1.6">'
-        f'{ai["chart_assessment"]} {ai["trade_narrative"]}'
+        f'{_context_result}'
         f'</div>',
         unsafe_allow_html=True,
     )
-
-    if ai.get("red_flags"):
-        flags_html = "".join(
-            f'<div style="color:#f85149;font-size:12px;margin-top:4px">⚠ {f}</div>'
-            for f in ai["red_flags"]
-        )
-        st.markdown(
-            f'<div style="margin-top:6px;padding:8px 14px;background:#1a1215;'
-            f'border-radius:6px;border:1px solid #3d1f20">{flags_html}</div>',
-            unsafe_allow_html=True,
-        )
 
 # -------------------------------------------------------------------------
 # Log Entry
@@ -1075,17 +1073,37 @@ def _call_claude_chat(
         chart_block = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": _b64}}
 
     strats = sig.get("strategies_fired", [])
+    _sys_theme    = sig.get("theme_name") or ""
+    _sys_theme_nr = sig.get("theme_narrative") or ""
+    _sys_news     = sig.get("news_headlines") or []
+    _sys_eps      = sig.get("eps_yoy")
+    _sys_rev      = sig.get("revenue_yoy")
+    _sys_earn     = sig.get("earnings_days_out")
+
+    _theme_line = (
+        f"- Theme: {_sys_theme}" + (f" — {_sys_theme_nr}" if _sys_theme_nr else "") + "\n"
+    ) if _sys_theme else ""
+    _fund_line = (
+        f"- Fundamentals: EPS YoY {_sys_eps:+.0%}" if _sys_eps is not None else "- Fundamentals: EPS YoY n/a"
+    ) + (f", Rev YoY {_sys_rev:+.0%}" if _sys_rev is not None else ", Rev YoY n/a") + (
+        f", earnings in {_sys_earn}d" if _sys_earn else ""
+    ) + "\n"
+    _news_line = (
+        "- Recent news:\n" + "\n".join(f"  • {h}" for h in _sys_news[:5]) + "\n"
+    ) if _sys_news else ""
+
     system = (
-        f"You are a stock trading assistant reviewing {sig['symbol']} "
-        f"({sig.get('exchange', '?')}). Signal data:\n"
-        f"- Strategies detected: {', '.join(strats)}\n"
+        f"You are a swing trading analyst helping review {sig['symbol']} "
+        f"({sig.get('company_name', sig['symbol'])}, {sig.get('exchange', '?')}).\n"
+        f"Signal data:\n"
+        f"- Strategies: {', '.join(strats) or 'n/a'}\n"
         f"- Composite score: {sig.get('composite_score', '?')}/100\n"
         f"- Entry: {sig.get('entry_price', '?')}, Stop: {sig.get('stop_price', '?')}, "
         f"Target: {sig.get('target_price', '?')}\n"
         f"- RS Rank: {sig.get('rs_rank', '?')}th percentile\n"
-        f"- Signal date: {sig.get('date', '?')}\n"
-        f"The chart image is attached to the first message in the conversation. "
-        f"Be concise, specific, and actionable for a swing trader."
+        + _theme_line + _fund_line + _news_line
+        + f"The chart image may be attached. Discuss macro context, news, and fundamentals alongside technicals. "
+        f"Be concise and actionable for a swing trader."
     )
 
     # Reconstruct message list — chart block attaches to the very first user message
@@ -1148,7 +1166,7 @@ if _user_input:
     with st.chat_message("assistant"):
         with st.spinner("Thinking…"):
             try:
-                _reply = _call_claude_chat(sig, chart_path, _chat_history[:-1], _user_input)
+                _reply = _call_claude_chat(display, chart_path, _chat_history[:-1], _user_input)
             except Exception as _exc:
                 _reply = f"Error contacting Claude: {_exc}"
         st.markdown(_reply)
