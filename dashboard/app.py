@@ -39,8 +39,8 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-/* Tighter top padding */
-.block-container { padding-top: 1rem; }
+/* No top padding */
+.block-container { padding-top: 0 !important; }
 
 /* Metric strip */
 .strip {
