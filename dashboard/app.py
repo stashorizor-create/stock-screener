@@ -123,6 +123,9 @@ div[data-testid="stRadio"] label:has(input:checked) {
 }
 div[data-testid="stRadio"] label > div:first-child { display: none; }
 
+/* Hide Streamlit's built-in image fullscreen button */
+button[title="View fullscreen"] { display: none !important; }
+
 /* Market overview button — centered glow */
 div[data-testid="stButton"]:has(button p:contains("🌡️")) button {
     background: linear-gradient(135deg, #0d1b35 0%, #1a2d4a 100%) !important;
@@ -527,21 +530,24 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Chart — single ⛶ button top-right, expands to full width
+# Chart — caption + expand button share one row, no double-button
 chart_path = charts.get(sig["symbol"])
 _ck = f"chart_big_{sig['symbol']}"
 _chart_big = st.session_state.get(_ck, False)
 
-_btn_label = "✕" if _chart_big else "⛶"
 _c1, _c2 = st.columns([11, 1])
+with _c1:
+    st.caption("Synthetic chart — real OHLCV loads after first pipeline run")
 with _c2:
-    if st.button(_btn_label, key=f"chbtn_{sig['symbol']}", use_container_width=True):
+    if st.button("✕" if _chart_big else "⛶", key=f"chbtn_{sig['symbol']}", use_container_width=True):
         st.session_state[_ck] = not _chart_big
         st.rerun()
 
 if chart_path and Path(chart_path).exists():
-    st.caption("Synthetic chart — real OHLCV loads after first pipeline run")
-    st.image(chart_path, use_container_width=True)
+    if _chart_big:
+        st.image(chart_path, use_container_width=True)
+    else:
+        st.image(chart_path, width=650)
 else:
     st.info("Chart not available.")
 
