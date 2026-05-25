@@ -40,8 +40,13 @@ def passes_rs_rank(rs_rank: float, min_percentile: float = 70.0) -> bool:
     return rs_rank >= min_percentile
 
 
-def passes_liquidity(avg_volume_50d: float, min_volume: float) -> bool:
-    return avg_volume_50d >= min_volume
+def passes_liquidity(avg_volume_10d: float, min_volume: float) -> bool:
+    """avg_volume_10d is in shares; min_volume must already be converted to shares by caller."""
+    return avg_volume_10d >= min_volume
+
+
+def passes_min_price(close: float, min_price: float) -> bool:
+    return close >= min_price
 
 
 def apply_all_hard_filters(
@@ -63,24 +68,27 @@ def apply_all_hard_filters(
 
     stage2_pass, stage2_failures = passes_stage2_trend(row)
     sma200_pass = passes_sma200_trend(df, end_idx, weeks=params.get("sma200_trend_weeks", 4))
-    prox_pass = passes_52w_proximity(row["close"], row["high_52w"])
-    liq_pass = passes_liquidity(row["volume_sma_50"], min_volume)
+    prox_pass   = passes_52w_proximity(row["close"], row["high_52w"])
+    price_pass  = passes_min_price(row["close"], params.get("min_price", 0.0))
+    # Liquidity uses 10-day volume; caller converts value threshold → shares
+    liq_pass    = passes_liquidity(row.get("volume_sma_10", row["volume_sma_50"]), min_volume)
 
     # RS rank filter only applied when a real rank is available (skip if None or 0)
-    min_rs = params.get("rs_min_percentile", 70.0)
+    min_rs  = params.get("rs_min_percentile", 70.0)
     rs_pass = (rs_rank is None) or (rs_rank == 0) or passes_rs_rank(rs_rank, min_rs)
 
-    all_pass = stage2_pass and sma200_pass and prox_pass and rs_pass and liq_pass
+    all_pass = stage2_pass and sma200_pass and prox_pass and price_pass and rs_pass and liq_pass
 
     return {
-        "symbol": symbol,
-        "passes": all_pass,
-        "stage2_trend": stage2_pass,
+        "symbol":          symbol,
+        "passes":          all_pass,
+        "stage2_trend":    stage2_pass,
         "stage2_failures": stage2_failures,
         "sma200_trending": sma200_pass,
-        "near_52w_high": prox_pass,
-        "rs_rank_pass": rs_pass,
-        "liquidity_pass": liq_pass,
-        "close": row["close"],
-        "rs_rank": rs_rank,
+        "near_52w_high":   prox_pass,
+        "price_pass":      price_pass,
+        "rs_rank_pass":    rs_pass,
+        "liquidity_pass":  liq_pass,
+        "close":           row["close"],
+        "rs_rank":         rs_rank,
     }
