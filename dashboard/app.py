@@ -527,85 +527,104 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Chart
 chart_path = charts.get(sig["symbol"])
-if chart_path and Path(chart_path).exists():
-    st.caption("Synthetic chart — real OHLCV loads after first pipeline run")
-    st.image(chart_path, use_container_width=True)
-else:
-    st.info("Chart not available.")
+_ck = f"chart_big_{sig['symbol']}"
+_chart_big = st.session_state.get(_ck, False)
 
-# Two-column layout — all info fits without scrolling
-col_left, col_right = st.columns(2)
-
-with col_left:
-    st.markdown('<div class="strip-label">Trade levels</div>', unsafe_allow_html=True)
-    rr = display.get("risk_reward")
-    rs = display.get("rs_rank")
-    st.markdown(strip_html([
-        ("Entry",   _price_fmt(sig, display.get("entry_price"))),
-        ("Stop",    _price_fmt(sig, display.get("stop_price"))),
-        ("Target",  _price_fmt(sig, display.get("target_price"))),
-        ("R / R",   f'<span class="white">{rr:.1f}×</span>' if rr else '<span class="grey">—</span>'),
-        ("RS Rank", f'<span class="white">{rs:.0f}</span><span class="grey" style="font-size:10px">th</span>'
-                    if rs else '<span class="grey">—</span>'),
-    ]), unsafe_allow_html=True)
-
-    st.markdown('<div class="strip-label">Position Size</div>', unsafe_allow_html=True)
-    _pc1, _pc2 = st.columns(2)
-    with _pc1:
-        _equity = st.number_input(
-            "Account equity", value=100_000, step=5_000, min_value=1_000,
-            key="equity", help="Total trading account size",
-        )
-    with _pc2:
-        _risk_pct = st.number_input(
-            "Risk per trade (%)", value=1.0, step=0.5, min_value=0.1, max_value=10.0,
-            key="risk_pct", help="Max % of equity to lose if stopped out",
-        )
-    _entry = display.get("entry_price")
-    _stop  = display.get("stop_price")
-    if _entry and _stop and _entry > _stop and _equity > 0:
-        _dollar_risk    = _equity * _risk_pct / 100
-        _risk_per_share = _entry - _stop
-        _shares         = _dollar_risk / _risk_per_share
-        _pos_value      = _shares * _entry
-        st.markdown(strip_html([
-            ("At risk",        f'<span class="red">{_price_fmt(sig, _dollar_risk)}</span>'),
-            ("Shares",         f'<span class="white">{_shares:,.0f}</span>'),
-            ("Position value", f'<span class="white">{_price_fmt(sig, _pos_value)}</span>'),
-            ("% of equity",    f'<span class="white">{_pos_value / _equity:.1%}</span>'),
-        ]), unsafe_allow_html=True)
+if _chart_big:
+    # Full-width expanded chart
+    _hd, _close = st.columns([9, 1])
+    with _close:
+        if st.button("✕", key=f"chclose_{sig['symbol']}", use_container_width=True):
+            st.session_state[_ck] = False
+            st.rerun()
+    if chart_path and Path(chart_path).exists():
+        st.image(chart_path, use_container_width=True)
     else:
-        st.caption("Enter equity above to calculate position size.")
+        st.info("Chart not available.")
+else:
+    # Chart left, info right — everything in one view
+    col_chart, col_info = st.columns([3, 2])
 
-with col_right:
-    st.markdown('<div class="strip-label">Fundamentals</div>', unsafe_allow_html=True)
-    st.markdown(strip_html([
-        ("EPS QoQ",  _pct(display.get("eps_qoq"))),
-        ("EPS YoY",  _pct(display.get("eps_yoy"))),
-        ("Rev QoQ",  _pct(display.get("revenue_qoq"))),
-        ("Rev YoY",  _pct(display.get("revenue_yoy"))),
-        ("Earnings", _days(display.get("earnings_days_out"))),
-    ]), unsafe_allow_html=True)
+    with col_chart:
+        _cl, _cr = st.columns([5, 1])
+        with _cr:
+            if st.button("⛶", key=f"chexp_{sig['symbol']}", use_container_width=True):
+                st.session_state[_ck] = True
+                st.rerun()
+        if chart_path and Path(chart_path).exists():
+            st.caption("Synthetic chart — real OHLCV loads after first pipeline run")
+            st.image(chart_path, use_container_width=True)
+        else:
+            st.info("Chart not available.")
 
-    live_indicator = " 🔴" if not live else " 🟢"
-    st.markdown(f'<div class="strip-label">Sentiment{live_indicator}</div>', unsafe_allow_html=True)
-    _nc = display.get("news_count_7d")
-    st.markdown(strip_html([
-        ("Insider buy",  _insider(display.get("insider_buy_days_ago"))),
-        ("News sent.",   _sent(display.get("news_sentiment"))),
-        ("News 7d",      f'<span class="white">{_nc}</span>' if _nc else '<span class="grey">—</span>'),
-        ("Google trend", _trend(display.get("google_trends_chg"))),
-    ]), unsafe_allow_html=True)
+    with col_info:
+        rr = display.get("risk_reward")
+        rs = display.get("rs_rank")
+        st.markdown('<div class="strip-label">Trade levels</div>', unsafe_allow_html=True)
+        st.markdown(strip_html([
+            ("Entry",   _price_fmt(sig, display.get("entry_price"))),
+            ("Stop",    _price_fmt(sig, display.get("stop_price"))),
+            ("Target",  _price_fmt(sig, display.get("target_price"))),
+            ("R / R",   f'<span class="white">{rr:.1f}×</span>' if rr else '<span class="grey">—</span>'),
+            ("RS Rank", f'<span class="white">{rs:.0f}</span><span class="grey" style="font-size:10px">th</span>'
+                        if rs else '<span class="grey">—</span>'),
+        ]), unsafe_allow_html=True)
 
-    notes = display.get("pattern_notes", "")
-    if notes:
-        st.markdown(
-            f'<div style="color:#7d8590;font-size:12px;margin-top:6px;padding:8px 12px;'
-            f'background:#161b22;border-radius:6px;border:1px solid #21262d">{notes}</div>',
-            unsafe_allow_html=True,
-        )
+        st.markdown('<div class="strip-label">Position Size</div>', unsafe_allow_html=True)
+        _pc1, _pc2 = st.columns(2)
+        with _pc1:
+            _equity = st.number_input(
+                "Account equity", value=100_000, step=5_000, min_value=1_000,
+                key="equity", help="Total trading account size",
+            )
+        with _pc2:
+            _risk_pct = st.number_input(
+                "Risk per trade (%)", value=1.0, step=0.5, min_value=0.1, max_value=10.0,
+                key="risk_pct", help="Max % of equity to lose if stopped out",
+            )
+        _entry = display.get("entry_price")
+        _stop  = display.get("stop_price")
+        if _entry and _stop and _entry > _stop and _equity > 0:
+            _dollar_risk    = _equity * _risk_pct / 100
+            _risk_per_share = _entry - _stop
+            _shares         = _dollar_risk / _risk_per_share
+            _pos_value      = _shares * _entry
+            st.markdown(strip_html([
+                ("At risk",        f'<span class="red">{_price_fmt(sig, _dollar_risk)}</span>'),
+                ("Shares",         f'<span class="white">{_shares:,.0f}</span>'),
+                ("Position value", f'<span class="white">{_price_fmt(sig, _pos_value)}</span>'),
+                ("% of equity",    f'<span class="white">{_pos_value / _equity:.1%}</span>'),
+            ]), unsafe_allow_html=True)
+        else:
+            st.caption("Enter equity above to calculate position size.")
+
+        st.markdown('<div class="strip-label">Fundamentals</div>', unsafe_allow_html=True)
+        st.markdown(strip_html([
+            ("EPS QoQ",  _pct(display.get("eps_qoq"))),
+            ("EPS YoY",  _pct(display.get("eps_yoy"))),
+            ("Rev QoQ",  _pct(display.get("revenue_qoq"))),
+            ("Rev YoY",  _pct(display.get("revenue_yoy"))),
+            ("Earnings", _days(display.get("earnings_days_out"))),
+        ]), unsafe_allow_html=True)
+
+        live_indicator = " 🔴" if not live else " 🟢"
+        st.markdown(f'<div class="strip-label">Sentiment{live_indicator}</div>', unsafe_allow_html=True)
+        _nc = display.get("news_count_7d")
+        st.markdown(strip_html([
+            ("Insider buy",  _insider(display.get("insider_buy_days_ago"))),
+            ("News sent.",   _sent(display.get("news_sentiment"))),
+            ("News 7d",      f'<span class="white">{_nc}</span>' if _nc else '<span class="grey">—</span>'),
+            ("Google trend", _trend(display.get("google_trends_chg"))),
+        ]), unsafe_allow_html=True)
+
+        notes = display.get("pattern_notes", "")
+        if notes:
+            st.markdown(
+                f'<div style="color:#7d8590;font-size:12px;margin-top:6px;padding:8px 12px;'
+                f'background:#161b22;border-radius:6px;border:1px solid #21262d">{notes}</div>',
+                unsafe_allow_html=True,
+            )
 
 
 # -------------------------------------------------------------------------
