@@ -48,8 +48,11 @@ def detect_vcp(
     if pivot < high_52w * base_high_min_vs_52w:
         return None
 
-    # Current price must be near the pivot
+    # Price must be in the buy zone: within pivot_proximity_pct below OR above the pivot.
+    # Above the upper bound means the breakout already happened and the setup is stale.
     if current_close < pivot * (1 - pivot_proximity_pct):
+        return None
+    if current_close > pivot * (1 + pivot_proximity_pct):
         return None
 
     # Verify contractions are truly tightening (each range < previous)

@@ -72,8 +72,11 @@ def detect_qullamaggie_setup(
         if depth > max_base_depth_pct:
             continue
 
-        # Must be near the pivot
+        # Price must be in the buy zone: ≤5% below the pivot and ≤5% above it.
+        # Beyond the upper bound = breakout already happened, setup is stale.
         if current_close < base_high * (1 - pivot_proximity_pct):
+            continue
+        if current_close > base_high * (1 + pivot_proximity_pct):
             continue
 
         # Check prior move (look back up to 6 months before base)
