@@ -432,7 +432,7 @@ def expand_to_rows(signals: list[dict]) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 ALL_SIGNALS, _data_source = get_signals()
-ALL_ROWS = expand_to_rows(ALL_SIGNALS)
+ALL_ROWS = ALL_SIGNALS
 
 STRAT_MAP = {
     "VCP": "vcp", "Qullamaggie": "qullamaggie",
@@ -489,7 +489,8 @@ with st.sidebar:
     score_color_char = lambda s: ("🟢" if s >= 75 else ("🟡" if s >= 60 else "🔴"))
     labels = [
         f"#{i+1} {score_color_char(s['composite_score'])} **{s['symbol']}**"
-        f" `{BADGE_LABELS.get(s['strategies_fired'][0], '?') if s.get('strategies_fired') else '?'}`"
+        f" `{'|'.join(BADGE_LABELS.get(st, '?') for st in s.get('strategies_fired', [])[:3]) or '?'}`"
+        f" {s['composite_score']:.0f}"
         for i, s in enumerate(filtered)
     ]
 
@@ -763,6 +764,32 @@ if _sig_date_str:
 
 # Chart — use stored path from pipeline run, fall back to None
 chart_path = sig.get("chart_image_path") or None
+
+# Chart-switching buttons for multi-strategy stocks
+_strats = sig.get("strategies_fired", [])
+_chart_strat_key = f"chart_strat_{sig['symbol']}_{sig.get('date', '')}"
+if _chart_strat_key not in st.session_state:
+    st.session_state[_chart_strat_key] = None
+_per_strat_charts = [s for s in _strats if sig.get(f"chart_{s}")]
+if len(_per_strat_charts) >= 1 and chart_path:
+    _scols = st.columns(len(_per_strat_charts) + 1)
+    _cur_sel = st.session_state.get(_chart_strat_key)
+    with _scols[0]:
+        if st.button("Combined", key=f"cbtn_main_{sig['symbol']}", use_container_width=True,
+                     type="primary" if _cur_sel is None else "secondary"):
+            st.session_state[_chart_strat_key] = None
+            st.rerun()
+    for _bi, _strat in enumerate(_per_strat_charts):
+        with _scols[_bi + 1]:
+            if st.button(BADGE_LABELS.get(_strat, _strat), key=f"cbtn_{_strat}_{sig['symbol']}",
+                         use_container_width=True,
+                         type="primary" if _cur_sel == _strat else "secondary"):
+                st.session_state[_chart_strat_key] = _strat
+                st.rerun()
+    _sel = st.session_state.get(_chart_strat_key)
+    if _sel and sig.get(f"chart_{_sel}"):
+        chart_path = sig.get(f"chart_{_sel}")
+
 _ck = f"chart_big_{sig['symbol']}"
 _chart_big = st.session_state.get(_ck, False)
 
@@ -801,39 +828,6 @@ st.markdown(strip_html([
                 if rs else '<span class="grey">—</span>'),
 ]), unsafe_allow_html=True)
 
-# Position size — equity persists across signals via session_state key
-st.markdown('<div class="strip-label">Position Size</div>', unsafe_allow_html=True)
-if "equity" not in st.session_state:
-    st.session_state["equity"] = 100_000
-if "risk_pct" not in st.session_state:
-    st.session_state["risk_pct"] = 1.0
-_pc1, _pc2 = st.columns(2)
-with _pc1:
-    _equity = st.number_input(
-        "Account equity", min_value=1_000, step=5_000,
-        key="equity", help="Total trading account size",
-    )
-with _pc2:
-    _risk_pct = st.number_input(
-        "Risk per trade (%)", min_value=0.1, max_value=10.0, step=0.5,
-        key="risk_pct", help="Max % of equity to lose if stopped out",
-    )
-_entry = display.get("entry_price")
-_stop  = display.get("stop_price")
-if _entry and _stop and _entry > _stop and _equity > 0:
-    _dollar_risk    = _equity * _risk_pct / 100
-    _risk_per_share = _entry - _stop
-    _shares         = _dollar_risk / _risk_per_share
-    _pos_value      = _shares * _entry
-    st.markdown(strip_html([
-        ("At risk",        f'<span class="red">{_price_fmt(sig, _dollar_risk)}</span>'),
-        ("Shares",         f'<span class="white">{_shares:,.0f}</span>'),
-        ("Position value", f'<span class="white">{_price_fmt(sig, _pos_value)}</span>'),
-        ("% of equity",    f'<span class="white">{_pos_value / _equity:.1%}</span>'),
-    ]), unsafe_allow_html=True)
-else:
-    st.caption("Enter equity above to calculate position size.")
-
 _info_l, _info_r = st.columns(2)
 with _info_l:
     st.markdown('<div class="strip-label">Fundamentals</div>', unsafe_allow_html=True)
@@ -864,6 +858,34 @@ if notes:
         unsafe_allow_html=True,
     )
 
+
+# -------------------------------------------------------------------------
+# Theme Classification
+# -------------------------------------------------------------------------
+
+if sig.get("theme_name"):
+    _t_m = (sig.get("theme_momentum") or "").lower()
+    _t_color = {"strong": "#3fb950", "moderate": "#e3b341", "emerging": "#388bfd"}.get(_t_m, "#7d8590")
+    _t_fit = (sig.get("fit_strength") or "").lower()
+    _t_fit_color = {"high": "#3fb950", "medium": "#e3b341", "low": "#f85149"}.get(_t_fit, "#7d8590")
+    st.markdown('<div class="strip-label" style="margin-top:10px">Theme</div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div style="padding:10px 14px;background:#161b22;border-radius:8px;'
+        f'border:1px solid #21262d;margin-bottom:6px">'
+        f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">'
+        f'<span style="font-size:13px;font-weight:700;color:#e6edf3">{sig["theme_name"]}</span>'
+        + (f'<span style="font-size:10px;font-weight:600;color:{_t_color};'
+           f'background:{_t_color}22;border-radius:4px;padding:2px 6px">{_t_m.upper()}</span>'
+           if _t_m else "")
+        + (f'<span style="font-size:10px;font-weight:600;color:{_t_fit_color};'
+           f'background:{_t_fit_color}22;border-radius:4px;padding:2px 6px">FIT: {_t_fit.upper()}</span>'
+           if _t_fit else "")
+        + f'</div>'
+        + (f'<div style="color:#8b949e;font-size:12px;line-height:1.5">{sig["theme_narrative"]}</div>'
+           if sig.get("theme_narrative") else "")
+        + f'</div>',
+        unsafe_allow_html=True,
+    )
 
 # -------------------------------------------------------------------------
 # AI Assessment
@@ -977,3 +999,163 @@ with st.expander(f"📥  Log entry — {sig['symbol']} / {BADGE_LABELS.get(_stra
                     st.error("Save failed — check Supabase connection")
             else:
                 st.warning("Entry price and stop price are required")
+
+
+# Position size — equity persists across signals via session_state key
+st.markdown('<div class="strip-label">Position Size</div>', unsafe_allow_html=True)
+if "equity" not in st.session_state:
+    st.session_state["equity"] = 100_000
+if "risk_pct" not in st.session_state:
+    st.session_state["risk_pct"] = 1.0
+_pc1, _pc2 = st.columns(2)
+with _pc1:
+    _equity = st.number_input(
+        "Account equity", min_value=1_000, step=5_000,
+        key="equity", help="Total trading account size",
+    )
+with _pc2:
+    _risk_pct = st.number_input(
+        "Risk per trade (%)", min_value=0.1, max_value=10.0, step=0.5,
+        key="risk_pct", help="Max % of equity to lose if stopped out",
+    )
+_entry = display.get("entry_price")
+_stop  = display.get("stop_price")
+if _entry and _stop and _entry > _stop and _equity > 0:
+    _dollar_risk    = _equity * _risk_pct / 100
+    _risk_per_share = _entry - _stop
+    _shares         = _dollar_risk / _risk_per_share
+    _pos_value      = _shares * _entry
+    st.markdown(strip_html([
+        ("At risk",        f'<span class="red">{_price_fmt(sig, _dollar_risk)}</span>'),
+        ("Shares",         f'<span class="white">{_shares:,.0f}</span>'),
+        ("Position value", f'<span class="white">{_price_fmt(sig, _pos_value)}</span>'),
+        ("% of equity",    f'<span class="white">{_pos_value / _equity:.1%}</span>'),
+    ]), unsafe_allow_html=True)
+else:
+    st.caption("Enter equity above to calculate position size.")
+
+
+# -------------------------------------------------------------------------
+# Signal Chatbox
+# -------------------------------------------------------------------------
+
+def _call_claude_chat(
+    sig: dict,
+    chart_path: str | None,
+    history: list[dict],
+    user_message: str,
+) -> str:
+    """Call Claude with chart image + signal context + conversation history."""
+    import base64
+
+    try:
+        import anthropic
+    except ImportError:
+        return "anthropic package not installed."
+
+    api_key = None
+    try:
+        api_key = st.secrets.get("ANTHROPIC_API_KEY")
+    except Exception:
+        pass
+    if not api_key:
+        try:
+            from config.settings import settings
+            api_key = settings.ANTHROPIC_API_KEY
+        except Exception:
+            pass
+    if not api_key:
+        return "ANTHROPIC_API_KEY not configured — add it to Streamlit Cloud secrets."
+
+    # Build chart content block once (attached to first user message only)
+    chart_block = None
+    _is_url   = chart_path and chart_path.startswith("http")
+    _is_local = chart_path and not _is_url and Path(chart_path).exists()
+    if _is_url:
+        chart_block = {"type": "image", "source": {"type": "url", "url": chart_path}}
+    elif _is_local:
+        with open(chart_path, "rb") as _f:
+            _b64 = base64.standard_b64encode(_f.read()).decode()
+        chart_block = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": _b64}}
+
+    strats = sig.get("strategies_fired", [])
+    system = (
+        f"You are a stock trading assistant reviewing {sig['symbol']} "
+        f"({sig.get('exchange', '?')}). Signal data:\n"
+        f"- Strategies detected: {', '.join(strats)}\n"
+        f"- Composite score: {sig.get('composite_score', '?')}/100\n"
+        f"- Entry: {sig.get('entry_price', '?')}, Stop: {sig.get('stop_price', '?')}, "
+        f"Target: {sig.get('target_price', '?')}\n"
+        f"- RS Rank: {sig.get('rs_rank', '?')}th percentile\n"
+        f"- Signal date: {sig.get('date', '?')}\n"
+        f"The chart image is attached to the first message in the conversation. "
+        f"Be concise, specific, and actionable for a swing trader."
+    )
+
+    # Reconstruct message list — chart block attaches to the very first user message
+    messages: list[dict] = []
+    if history:
+        first = history[0]
+        first_content = (
+            [chart_block, {"type": "text", "text": first["content"]}]
+            if chart_block else first["content"]
+        )
+        messages.append({"role": "user", "content": first_content})
+        for _m in history[1:]:
+            messages.append({"role": _m["role"], "content": _m["content"]})
+        messages.append({"role": "user", "content": user_message})
+    else:
+        # First turn in this conversation — attach chart here
+        content = (
+            [chart_block, {"type": "text", "text": user_message}]
+            if chart_block else user_message
+        )
+        messages.append({"role": "user", "content": content})
+
+    client = anthropic.Anthropic(api_key=api_key)
+    resp = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=1024,
+        system=system,
+        messages=messages,
+    )
+    return resp.content[0].text
+
+
+st.markdown('<div class="strip-label" style="margin-top:18px">Ask Claude about this signal</div>', unsafe_allow_html=True)
+
+_chat_key = f"chat_{sig['symbol']}_{sig.get('date', '')}"
+if _chat_key not in st.session_state:
+    st.session_state[_chat_key] = []
+
+_chat_history: list[dict] = st.session_state[_chat_key]
+
+if _chat_history:
+    if st.button("🗑  Clear chat", key=f"clearchat_{sig['symbol']}"):
+        st.session_state[_chat_key] = []
+        st.rerun()
+
+for _msg in _chat_history:
+    with st.chat_message(_msg["role"]):
+        st.markdown(_msg["content"])
+
+_user_input = st.chat_input(
+    f"Ask about {sig['symbol']} — chart context included",
+    key=f"chat_input_{sig['symbol']}_{sig.get('date', '')}",
+)
+
+if _user_input:
+    _chat_history.append({"role": "user", "content": _user_input})
+    with st.chat_message("user"):
+        st.markdown(_user_input)
+
+    with st.chat_message("assistant"):
+        with st.spinner("Thinking…"):
+            try:
+                _reply = _call_claude_chat(sig, chart_path, _chat_history[:-1], _user_input)
+            except Exception as _exc:
+                _reply = f"Error contacting Claude: {_exc}"
+        st.markdown(_reply)
+
+    _chat_history.append({"role": "assistant", "content": _reply})
+    st.session_state[_chat_key] = _chat_history

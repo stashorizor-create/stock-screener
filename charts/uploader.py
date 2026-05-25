@@ -11,21 +11,27 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 _client = None
+_init_failed = False   # sentinel — warn once, then stay silent
 
 
 def _get_client():
-    global _client
+    global _client, _init_failed
     if _client is not None:
         return _client
+    if _init_failed:
+        return None
     try:
         from supabase import create_client
         from config.settings import settings
         if not settings.SUPABASE_URL or not settings.SUPABASE_SERVICE_KEY:
+            logger.warning("Supabase chart upload disabled: SUPABASE_URL or SUPABASE_SERVICE_KEY not set")
+            _init_failed = True
             return None
         _client = create_client(settings.SUPABASE_URL, settings.SUPABASE_SERVICE_KEY)
         return _client
     except Exception as exc:
-        logger.warning("Supabase client init failed: %s", exc)
+        logger.warning("Supabase client init failed (charts will be local only): %s", exc)
+        _init_failed = True
         return None
 
 

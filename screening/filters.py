@@ -49,6 +49,35 @@ def passes_min_price(close: float, min_price: float) -> bool:
     return close >= min_price
 
 
+def apply_base_filters(
+    df: pd.DataFrame,
+    symbol: str,
+    min_volume: float,
+    params: dict,
+) -> dict:
+    """
+    Minimal shared pre-filter for all strategies.
+    Only checks history length, minimum price, and liquidity.
+    Stage 2 trend conditions are enforced inside detect_vcp() only —
+    other strategies (Qullamaggie, EMA pullback, BGU, Pocket Pivot) apply
+    their own lighter criteria internally.
+    """
+    if len(df) < 200:
+        return {"passes": False, "reason": "insufficient_history"}
+
+    row = df.iloc[-1]
+    price_pass = passes_min_price(row["close"], params.get("min_price", 0.0))
+    liq_pass   = passes_liquidity(row.get("volume_sma_10", row["volume_sma_50"]), min_volume)
+
+    return {
+        "symbol":        symbol,
+        "passes":        price_pass and liq_pass,
+        "price_pass":    price_pass,
+        "liquidity_pass": liq_pass,
+        "close":         row["close"],
+    }
+
+
 def apply_all_hard_filters(
     df: pd.DataFrame,
     symbol: str,
@@ -57,8 +86,8 @@ def apply_all_hard_filters(
     params: dict,
 ) -> dict:
     """
-    Run all hard filters against the most recent row in df.
-    Returns a result dict with pass/fail per filter and an overall `passes` bool.
+    Full Minervini Stage 2 filter. Used internally by detect_vcp().
+    Call apply_base_filters() for the universal pipeline gate instead.
     """
     if len(df) < 200:
         return {"passes": False, "reason": "insufficient_history"}
@@ -70,10 +99,8 @@ def apply_all_hard_filters(
     sma200_pass = passes_sma200_trend(df, end_idx, weeks=params.get("sma200_trend_weeks", 4))
     prox_pass   = passes_52w_proximity(row["close"], row["high_52w"])
     price_pass  = passes_min_price(row["close"], params.get("min_price", 0.0))
-    # Liquidity uses 10-day volume; caller converts value threshold → shares
     liq_pass    = passes_liquidity(row.get("volume_sma_10", row["volume_sma_50"]), min_volume)
 
-    # RS rank filter only applied when a real rank is available (skip if None or 0)
     min_rs  = params.get("rs_min_percentile", 70.0)
     rs_pass = (rs_rank is None) or (rs_rank == 0) or passes_rs_rank(rs_rank, min_rs)
 

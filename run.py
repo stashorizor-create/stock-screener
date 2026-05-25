@@ -8,7 +8,7 @@ Usage:
     python run.py --skip-ai                 # skip Claude AI assessment
     python run.py --skip-themes             # skip theme classification
     python run.py --exchange STO            # single exchange only (STO/OSL/CPH/HEL)
-    python run.py --min-score 65            # only keep signals above this score
+    python run.py --min-score 70            # only keep signals above this score
     python run.py --from-checkpoint FILE    # skip pipeline, retry DB write from saved JSON
 """
 from __future__ import annotations
@@ -32,7 +32,7 @@ from config.universe_config import EXCHANGES
 from data.ingestor import client as borsdata
 from database.models import Alert, Universe, SessionLocal
 from screening.indicators import compute_all, rank_rs_across_universe
-from screening.filters import apply_all_hard_filters
+from screening.filters import apply_base_filters
 from screening.strategies.runner import run_all_strategies
 from screening.base_detection import find_base
 from themes.refresher import load_hot_themes
@@ -76,7 +76,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--skip-ai",          action="store_true",      help="Skip AI assessment")
     p.add_argument("--skip-themes",      action="store_true",      help="Skip theme classification")
     p.add_argument("--exchange",         default="",               help="Filter exchange (STO/OSL/CPH/HEL)")
-    p.add_argument("--min-score",        type=float, default=60.0, help="Min composite score for alerts")
+    p.add_argument("--min-score",        type=float, default=65.0, help="Min composite score for AI assessment")
     p.add_argument("--from-checkpoint",  default="",  metavar="FILE",
                    help="Path to pipeline_YYYY-MM-DD.json — skip pipeline, retry DB write only")
     return p.parse_args()
@@ -259,9 +259,9 @@ def main() -> None:
     raw_returns: dict[str, float]        = {}   # all symbols → 63d return
     meta_map:    dict[str, dict]         = {}   # symbol → {name, exchange, currency}
 
-    n_total  = len(instruments_df)
-    n_stage2 = 0
-    n_skip   = 0
+    n_total    = len(instruments_df)
+    n_eligible = 0
+    n_skip     = 0
 
     for i, (_, row) in enumerate(instruments_df.iterrows()):
         ins_id    = int(row["insId"])
@@ -273,7 +273,7 @@ def main() -> None:
         exc_cfg   = EXCHANGES.get(exchange)
 
         if i % 100 == 0 and i > 0:
-            logger.info("  %d / %d  |  Stage-2 passers: %d", i, n_total, n_stage2)
+            logger.info("  %d / %d  |  Eligible so far: %d", i, n_total, n_eligible)
 
         try:
             df = borsdata.get_ohlcv(ins_id, from_date=from_date)
@@ -306,23 +306,24 @@ def main() -> None:
         else:
             min_vol = 0.0
 
-        # Stage 2 hard filter (RS skipped here — applied after two-pass ranking)
-        filt = apply_all_hard_filters(
-            df, symbol, rs_rank=0, min_volume=min_vol,
-            params={"sma200_trend_weeks": 4, "rs_min_percentile": 0, "min_price": min_price},
+        # Base filter — price floor + liquidity only. Stage 2 trend is VCP-specific
+        # and enforced inside detect_vcp(). Other strategies apply their own criteria.
+        filt = apply_base_filters(
+            df, symbol, min_volume=min_vol,
+            params={"min_price": min_price},
         )
         if not filt["passes"]:
             continue
 
-        n_stage2 += 1
+        n_eligible += 1
         passing_dfs[symbol] = df
         meta_map[symbol] = {"name": name, "exchange": exchange, "currency": currency}
 
-    logger.info("OHLCV pass done: %d / %d passed Stage 2  (%d skipped)",
-                n_stage2, n_total, n_skip)
+    logger.info("OHLCV pass done: %d / %d eligible  (%d skipped)",
+                n_eligible, n_total, n_skip)
 
     if not passing_dfs:
-        logger.info("No Stage 2 stocks. Exiting.")
+        logger.info("No eligible stocks. Exiting.")
         return
 
     # ------------------------------------------------------------------

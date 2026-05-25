@@ -28,6 +28,26 @@ def detect_vcp(
     if end_idx < 60:
         return None
 
+    # Minervini Stage 2 trend template — VCP-specific requirement.
+    # Other strategies enforce their own lighter conditions internally.
+    row = df.iloc[end_idx]
+    for col in ("sma_50", "sma_150", "sma_200"):
+        if pd.isna(row.get(col)):
+            return None
+    if not (
+        row["close"] > row["sma_50"] and
+        row["close"] > row["sma_150"] and
+        row["close"] > row["sma_200"] and
+        row["sma_50"] > row["sma_150"] and
+        row["sma_150"] > row["sma_200"]
+    ):
+        return None
+    # 200 SMA must be higher than it was 4 weeks ago
+    _lookback = 20
+    if end_idx >= _lookback and not pd.isna(df["sma_200"].iloc[end_idx - _lookback]):
+        if df["sma_200"].iloc[end_idx] <= df["sma_200"].iloc[end_idx - _lookback]:
+            return None
+
     current_close = df["close"].iloc[end_idx]
     high_52w = df["high_52w"].iloc[end_idx]
 
