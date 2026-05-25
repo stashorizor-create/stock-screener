@@ -22,6 +22,7 @@ from dashboard.data_loader import (
     EXCHANGE_FLAGS, EXCHANGE_NAMES,
 )
 from dashboard.market import fetch_sector_returns
+from dashboard import trades_db
 from themes.refresher import load_hot_themes
 
 # ---------------------------------------------------------------------------
@@ -498,6 +499,8 @@ with st.sidebar:
     st.divider()
     if st.button("🌡️  Market Overview", key="market_toggle", use_container_width=True):
         st.session_state["market_open"] = not st.session_state.get("market_open", False)
+    if st.button("📒  My Trades", key="trades_toggle", use_container_width=True):
+        st.session_state["trades_open"] = not st.session_state.get("trades_open", False)
 
 
 # ---------------------------------------------------------------------------
@@ -611,6 +614,84 @@ if st.session_state.get("market_open", False):
                 )
 
 st.divider()
+
+# ===== MY TRADES =====
+
+if st.session_state.get("trades_open", False):
+    _open_trades  = trades_db.get_open_trades()
+    _closed_trades = trades_db.get_closed_trades()
+    _strat_stats  = trades_db.get_strategy_stats()
+
+    st.markdown("**My Trades**")
+
+    # Open positions
+    st.markdown('<div class="strip-label">Open Positions</div>', unsafe_allow_html=True)
+    if not _open_trades:
+        st.caption("No open positions. Log an entry from a signal below.")
+    else:
+        for _t in _open_trades:
+            _ep  = _t.get("entry_price") or 0.0
+            _sp  = _t.get("stop_price")  or 0.0
+            _tp  = _t.get("target_price")
+            _rr  = round((_tp - _ep) / (_ep - _sp), 1) if (_tp and _ep and _sp and _ep > _sp) else None
+            _tc1, _tc2 = st.columns([4, 1])
+            with _tc1:
+                st.markdown(strip_html([
+                    ("Symbol",   f'<span style="font-weight:700;color:#e6edf3">{_t["symbol"]}</span>'),
+                    ("Strategy", f'<span style="color:#8b949e">{BADGE_LABELS.get(_t.get("strategy",""), _t.get("strategy","—"))}</span>'),
+                    ("Entry",    f'<span class="white">{_ep:.2f}</span>'),
+                    ("Stop",     f'<span class="red">{_sp:.2f}</span>'),
+                    ("Target",   f'<span class="green">{_tp:.2f}</span>' if _tp else '<span class="grey">—</span>'),
+                    ("Planned R:R", f'<span class="white">{_rr:.1f}×</span>' if _rr else '<span class="grey">—</span>'),
+                    ("Since",    f'<span class="grey" style="font-size:11px">{_t.get("entry_date","")}</span>'),
+                ]), unsafe_allow_html=True)
+            with _tc2:
+                with st.expander("Record exit"):
+                    with st.form(f"exit_{_t['id']}"):
+                        _xp = st.number_input("Exit price", min_value=0.01, step=0.01,
+                                              format="%.2f", key=f"xprice_{_t['id']}")
+                        _xn = st.text_input("Notes", key=f"xnote_{_t['id']}")
+                        if st.form_submit_button("Confirm exit", use_container_width=True):
+                            if _xp > 0 and trades_db.record_exit(_t["id"], _xp, _xn):
+                                st.success("Saved")
+                                st.rerun()
+                            else:
+                                st.error("Failed — check connection")
+
+    # Strategy performance stats
+    if _strat_stats:
+        st.markdown('<div class="strip-label" style="margin-top:10px">Performance by Strategy</div>', unsafe_allow_html=True)
+        for _s in _strat_stats:
+            _wr = _s["win_rate"]
+            _wc = "#3fb950" if _wr >= 0.5 else ("#e3b341" if _wr >= 0.35 else "#f85149")
+            _rr_str = f'{_s["avg_rr"]:.2f}×' if _s["avg_rr"] is not None else "—"
+            _rr_col = "#3fb950" if (_s["avg_rr"] or 0) >= 1.0 else ("#e3b341" if (_s["avg_rr"] or 0) >= 0 else "#f85149")
+            st.markdown(strip_html([
+                ("Strategy", f'<span class="white">{BADGE_LABELS.get(_s["strategy"], _s["strategy"])}</span>'),
+                ("Trades",   f'<span class="white">{_s["trades"]}</span>'),
+                ("Wins",     f'<span class="white">{_s["wins"]}</span>'),
+                ("Win %",    f'<span style="color:{_wc};font-weight:700">{_wr:.0%}</span>'),
+                ("Avg R:R",  f'<span style="color:{_rr_col};font-weight:700">{_rr_str}</span>'),
+            ]), unsafe_allow_html=True)
+
+    # Closed trades log
+    if _closed_trades:
+        st.markdown('<div class="strip-label" style="margin-top:10px">Closed Trades</div>', unsafe_allow_html=True)
+        for _t in _closed_trades[:20]:
+            _rr  = _t.get("realized_rr")
+            _oc  = _t.get("outcome", "")
+            _oc_color = "#3fb950" if _oc == "win" else ("#f85149" if _oc == "loss" else "#7d8590")
+            st.markdown(strip_html([
+                ("Symbol",   f'<span class="white">{_t["symbol"]}</span>'),
+                ("Strategy", f'<span style="color:#8b949e">{BADGE_LABELS.get(_t.get("strategy",""), _t.get("strategy","—"))}</span>'),
+                ("Entry",    f'<span class="grey">{(_t.get("entry_price") or 0):.2f}</span>'),
+                ("Exit",     f'<span class="white">{(_t.get("exit_price") or 0):.2f}</span>'),
+                ("R:R",      f'<span style="color:{_oc_color};font-weight:700">{_rr:+.2f}R</span>' if _rr is not None else '<span class="grey">—</span>'),
+                ("Result",   f'<span style="color:{_oc_color}">{_oc.upper()}</span>'),
+                ("Date",     f'<span class="grey" style="font-size:11px">{_t.get("exit_date","")}</span>'),
+            ]), unsafe_allow_html=True)
+
+    st.divider()
 
 # ===== REGIONAL TOP 5 =====
 
@@ -859,3 +940,40 @@ else:
             f'border-radius:6px;border:1px solid #3d1f20">{flags_html}</div>',
             unsafe_allow_html=True,
         )
+
+# -------------------------------------------------------------------------
+# Log Entry
+# -------------------------------------------------------------------------
+
+st.markdown('<div class="strip-label" style="margin-top:18px">Log Trade</div>', unsafe_allow_html=True)
+_strat_key = sig.get("strategies_fired", [""])[0] if sig.get("strategies_fired") else ""
+with st.expander(f"📥  Log entry — {sig['symbol']} / {BADGE_LABELS.get(_strat_key, _strat_key)}"):
+    with st.form(f"log_entry_{sig['symbol']}_{_strat_key}_{sig.get('date','')}"):
+        _lc1, _lc2, _lc3 = st.columns(3)
+        with _lc1:
+            _l_entry = st.number_input("Entry price",
+                value=float(sig.get("entry_price") or 0), min_value=0.0, step=0.01, format="%.2f")
+        with _lc2:
+            _l_stop = st.number_input("Stop price",
+                value=float(sig.get("stop_price") or 0), min_value=0.0, step=0.01, format="%.2f")
+        with _lc3:
+            _l_target = st.number_input("Target price",
+                value=float(sig.get("target_price") or 0), min_value=0.0, step=0.01, format="%.2f")
+        _l_notes = st.text_input("Notes (optional)")
+        if st.form_submit_button("✓  Confirm entry", use_container_width=True):
+            if _l_entry > 0 and _l_stop > 0:
+                _saved = trades_db.log_entry(
+                    symbol=sig["symbol"],
+                    strategy=_strat_key,
+                    entry_price=_l_entry,
+                    stop_price=_l_stop,
+                    target_price=_l_target if _l_target > 0 else None,
+                    alert_date=sig.get("date", ""),
+                    notes=_l_notes,
+                )
+                if _saved:
+                    st.success(f"✓ Entry logged for {sig['symbol']} — open My Trades to track it")
+                else:
+                    st.error("Save failed — check Supabase connection")
+            else:
+                st.warning("Entry price and stop price are required")
