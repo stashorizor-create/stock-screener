@@ -14,7 +14,11 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
+import hashlib
+from datetime import datetime, timedelta, timezone
+
 import streamlit as st
+import extra_streamlit_components as stx
 
 from dashboard.data_loader import (
     load_signals, top_overall, top_by_region,
@@ -36,17 +40,25 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# Cookie manager — instantiated at module level so it persists across reruns
+_cookie_mgr = stx.CookieManager(key="screener_cookies")
+
 # ---------------------------------------------------------------------------
-# Password gate — must pass before anything renders
+# Password gate with 30-day cookie remember-me
 # ---------------------------------------------------------------------------
+
+_COOKIE_NAME = "screener_auth"
+_COOKIE_DAYS = 30
+
+
+def _auth_token(pw: str) -> str:
+    return hashlib.sha256(f"screener_v1_{pw}".encode()).hexdigest()[:32]
+
 
 def _check_password() -> bool:
     if st.session_state.get("_auth_ok"):
         return True
 
-    # Resolve the password from secrets — try [auth].password then flat password key.
-    # FileNotFoundError means no secrets.toml at all (local dev) → open access.
-    # Secrets present but key missing → block with config error so the mistake is visible.
     correct = None
     dev_mode = False
     try:
@@ -56,15 +68,25 @@ def _check_password() -> bool:
         dev_mode = True
 
     if dev_mode:
-        return True  # local dev, no secrets file
+        return True
 
     if not correct:
         st.error("Auth not configured: add `[auth]\\npassword = \"...\"` to Streamlit Cloud secrets.")
         st.stop()
 
+    # Check cookie — skip password form if already authenticated
+    try:
+        stored = _cookie_mgr.get(_COOKIE_NAME)
+        if stored and stored == _auth_token(correct):
+            st.session_state["_auth_ok"] = True
+            return True
+    except Exception:
+        pass
+
     def _submit():
         if st.session_state.get("_pw_input") == correct:
             st.session_state["_auth_ok"] = True
+            st.session_state["_set_cookie"] = True
         else:
             st.session_state["_auth_bad"] = True
 
@@ -75,7 +97,21 @@ def _check_password() -> bool:
     if st.session_state.get("_auth_bad"):
         st.error("Incorrect password.")
         st.session_state["_auth_bad"] = False
+
+    if st.session_state.get("_auth_ok"):
+        if st.session_state.pop("_set_cookie", False):
+            try:
+                _cookie_mgr.set(
+                    _COOKIE_NAME,
+                    _auth_token(correct),
+                    expires_at=datetime.now(timezone.utc) + timedelta(days=_COOKIE_DAYS),
+                )
+            except Exception:
+                pass
+        st.rerun()
+
     return False
+
 
 if not _check_password():
     st.stop()

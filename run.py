@@ -514,6 +514,13 @@ def main() -> None:
     # ------------------------------------------------------------------
     _write_db(raw_signals, ai_results, meta_map, today, args.dry_run)
 
+    # ------------------------------------------------------------------
+    # 11. Email digest
+    # ------------------------------------------------------------------
+    if not args.dry_run:
+        from notifications.email_report import send_nightly_email
+        send_nightly_email(raw_signals, today.isoformat())
+
 
 if __name__ == "__main__":
     main()

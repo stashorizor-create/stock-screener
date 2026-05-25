@@ -14,5 +14,6 @@ apscheduler>=3.10.0
 pytrends>=4.9.0
 praw>=7.7.0
 streamlit>=1.35.0
+extra-streamlit-components>=0.1.71
 supabase>=2.4.0
 yfinance>=0.2.40
