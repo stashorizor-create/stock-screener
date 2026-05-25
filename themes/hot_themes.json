@@ -1,0 +1,101 @@
+{
+  "generated_at": "2026-05-25",
+  "themes": {
+    "semiconductor_supercycle": {
+      "name": "Semiconductor Supercycle",
+      "description": "Leading chipmakers, equipment suppliers, and memory manufacturers are driving this theme, including companies like NVIDIA, TSMC ADRs, and ASML. Surging AI compute demand and next-generation data center buildouts are pushing semiconductor revenue and order books to record highs, reflected in the sector's extraordinary +91.2% six-month gain.",
+      "example_tickers": [
+        "NVDA",
+        "AMD",
+        "AVGO",
+        "AMAT",
+        "MU"
+      ],
+      "momentum": "high"
+    },
+    "cybersecurity_acceleration": {
+      "name": "Cybersecurity Acceleration",
+      "description": "Pure-play cybersecurity platforms, identity management firms, and AI-native security vendors make up this theme, spanning endpoint, cloud, and network protection. Rising nation-state threat activity, mandatory compliance frameworks, and enterprise AI adoption expanding attack surfaces are catalyzing accelerated security spending, with the sector up +7.1% in just the past week.",
+      "example_tickers": [
+        "CRWD",
+        "PANW",
+        "ZS",
+        "FTNT",
+        "S"
+      ],
+      "momentum": "high"
+    },
+    "ai_infrastructure": {
+      "name": "AI Infrastructure",
+      "description": "This theme encompasses hyperscaler cloud providers, custom AI chip designers, high-bandwidth memory suppliers, and data center networking companies. Unprecedented capital expenditure commitments from mega-cap tech firms to build out AI training and inference capacity are sustaining multi-quarter earnings beats and forward guidance upgrades across the stack.",
+      "example_tickers": [
+        "NVDA",
+        "MSFT",
+        "META",
+        "GOOGL",
+        "SMCI"
+      ],
+      "momentum": "high"
+    },
+    "clean_energy_renaissance": {
+      "name": "Clean Energy Renaissance",
+      "description": "Solar panel manufacturers, wind developers, battery storage companies, and clean hydrogen producers compose this theme alongside utilities pivoting aggressively to renewables. Policy tailwinds from extended clean energy tax credits, surging power demand from AI data centers, and falling levelized costs of energy are collectively driving the sector's +36.4% six-month performance.",
+      "example_tickers": [
+        "FSLR",
+        "ENPH",
+        "NEE",
+        "RUN",
+        "BE"
+      ],
+      "momentum": "high"
+    },
+    "power_grid_modernization": {
+      "name": "Power Grid Modernization",
+      "description": "Electrical equipment makers, grid software providers, transformer manufacturers, and regulated utilities upgrading transmission infrastructure form the core of this theme. The explosive power consumption requirements of AI data centers and EV adoption have created a multi-decade grid investment supercycle, with utilities gaining +3.4% this week as rate cases gain regulatory approval.",
+      "example_tickers": [
+        "ETN",
+        "PWR",
+        "HUBB",
+        "AEE",
+        "VST"
+      ],
+      "momentum": "high"
+    },
+    "healthcare_rebound": {
+      "name": "Healthcare Rebound",
+      "description": "Large-cap biopharma, managed care organizations, and medical device manufacturers are leading a sector rotation into defensive healthcare names. The sector's best weekly performance at +3.3% suggests institutional capital rotating into quality defensives amid macro uncertainty, while GLP-1 obesity drug revenues continue to reshape pharmaceutical earnings expectations.",
+      "example_tickers": [
+        "LLY",
+        "UNH",
+        "ABT",
+        "JNJ",
+        "MDT"
+      ],
+      "momentum": "medium"
+    },
+    "real_estate_rate_relief": {
+      "name": "Real Estate Rate Relief",
+      "description": "Data center REITs, industrial logistics REITs, and residential property trusts are benefiting as rate cut expectations firm up on the forward curve. A +3.1% weekly gain signals investors are front-running anticipated Federal Reserve easing, with data center REITs enjoying a dual tailwind from AI infrastructure demand overlapping with falling discount rates.",
+      "example_tickers": [
+        "EQIX",
+        "AMT",
+        "PLD",
+        "EXR",
+        "WELL"
+      ],
+      "momentum": "medium"
+    },
+    "energy_transition_commodities": {
+      "name": "Energy Transition Commodities",
+      "description": "Integrated oil majors, LNG exporters, uranium miners, and natural gas pipeline operators make up this theme as the world navigates the transition period requiring legacy fuels alongside renewables. Tight global LNG supply, data center power demand boosting natural gas consumption, and nuclear energy's AI-era revival are collectively sustaining energy's +34.4% six-month outperformance.",
+      "example_tickers": [
+        "XOM",
+        "LNG",
+        "CCJ",
+        "OKE",
+        "UEC"
+      ],
+      "momentum": "medium"
+    }
+  }
+}
