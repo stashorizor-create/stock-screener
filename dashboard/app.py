@@ -183,10 +183,13 @@ div[data-testid="stRadio"] label code {
     font-family: inherit !important;
 }
 
-/* Hide Streamlit top header, hamburger menu, footer */
+/* Hide Streamlit top header, hamburger menu, and "Made with Streamlit" footer badge */
 header[data-testid="stHeader"] { display: none !important; }
 #MainMenu { visibility: hidden !important; }
-footer { visibility: hidden !important; }
+/* Target only the branding badge — NOT the chat input container */
+footer .css-164nlkn, footer .viewerBadge_container__1QSob,
+footer .viewerBadge_link__1S137 { visibility: hidden !important; }
+section[data-testid="stBottom"] { visibility: visible !important; }
 
 /* Hide Streamlit's built-in image fullscreen button */
 button[title="View fullscreen"] { display: none !important; }
@@ -902,9 +905,12 @@ with col_btn:
     run_ai = st.button("Run AI assessment", key=f"ai_btn_{sig['symbol']}", use_container_width=True)
 
 if run_ai:
-    if not chart_path or not Path(chart_path).exists():
+    _chart_ok = chart_path and (
+        chart_path.startswith("http") or Path(chart_path).exists()
+    )
+    if not _chart_ok:
         with col_status:
-            st.warning("Chart file missing — cannot run assessment.")
+            st.warning("Chart not available — run the pipeline first.")
     else:
         try:
             from ai.agent import assess_signal as _assess

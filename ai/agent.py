@@ -63,7 +63,16 @@ _ASSESSMENT_TOOL = {
 
 
 def _load_chart_b64(chart_path: str | Path) -> str | None:
-    """Read a PNG file and return it as a base64 string."""
+    """Read a PNG (local file or URL) and return it as a base64 string."""
+    path_str = str(chart_path)
+    if path_str.startswith("http"):
+        try:
+            import urllib.request
+            with urllib.request.urlopen(path_str, timeout=15) as resp:
+                return base64.standard_b64encode(resp.read()).decode("utf-8")
+        except Exception as exc:
+            logger.warning("Chart download failed from %s: %s", path_str, exc)
+            return None
     path = Path(chart_path)
     if not path.exists():
         logger.warning("Chart not found: %s", path)
