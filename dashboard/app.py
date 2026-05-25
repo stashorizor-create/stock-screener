@@ -177,6 +177,33 @@ footer { visibility: hidden !important; }
 /* Hide Streamlit's built-in image fullscreen button */
 button[title="View fullscreen"] { display: none !important; }
 
+/* Regional top 5 — transparent overlay buttons sit on top of the HTML cards */
+div[data-testid="stMarkdownContainer"]:has(#reg-top5) ~ div[data-testid="stHorizontalBlock"]
+  div[data-testid="stButton"] {
+    margin-top: -34px !important;
+    position: relative !important;
+    z-index: 10 !important;
+    margin-bottom: 6px !important;
+}
+div[data-testid="stMarkdownContainer"]:has(#reg-top5) ~ div[data-testid="stHorizontalBlock"]
+  div[data-testid="stButton"] button {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    color: transparent !important;
+    cursor: pointer !important;
+    height: 32px !important;
+    padding: 0 !important;
+    width: 100% !important;
+}
+div[data-testid="stMarkdownContainer"]:has(#reg-top5) ~ div[data-testid="stHorizontalBlock"]
+  div[data-testid="stButton"] button:hover {
+    background: rgba(56,139,253,0.08) !important;
+    border: 1px solid #388bfd44 !important;
+    border-radius: 6px !important;
+    box-shadow: none !important;
+}
+
 /* Market overview button — centered glow */
 div[data-testid="stButton"]:has(button p:contains("🌡️")) button {
     background: linear-gradient(135deg, #0d1b35 0%, #1a2d4a 100%) !important;
@@ -614,6 +641,7 @@ st.divider()
 _regional = top_by_region(ALL_SIGNALS)
 if _regional and len(_regional) > 1:
     st.markdown("**Top 5 by Region**")
+    st.markdown('<div id="reg-top5"></div>', unsafe_allow_html=True)  # CSS targeting anchor
     _reg_cols = st.columns(len(_regional))
     for _col, (_ex, _sigs) in zip(_reg_cols, _regional.items()):
         _flag = EXCHANGE_FLAGS.get(_ex, "")
@@ -628,12 +656,21 @@ if _regional and len(_regional) > 1:
                 _score = _s.get("composite_score", 0)
                 _sc = "#3fb950" if _score >= 75 else ("#e3b341" if _score >= 60 else "#f85149")
                 _strats = _s.get("strategies_fired", [])
-                _badge_txt = BADGE_LABELS.get(_strats[0], "?") if _strats else "?"
-                if st.button(
-                    f"#{_rank}  {_s['symbol']}  {_badge_txt}  {_score:.0f}",
-                    key=f"reg_{_ex}_{_rank}",
-                    use_container_width=True,
-                ):
+                _b = badges_html(_strats[:1]) if _strats else ""
+                # Original styled card
+                st.markdown(
+                    f'<div style="display:flex;align-items:center;gap:6px;'
+                    f'padding:5px 8px;background:#161b22;border-radius:6px;'
+                    f'border:1px solid #21262d;margin-bottom:4px">'
+                    f'<span style="color:#484f58;font-size:10px;min-width:14px">#{_rank}</span>'
+                    f'<span style="font-weight:700;font-size:13px;color:#e6edf3;flex:1">{_s["symbol"]}</span>'
+                    f'{_b}'
+                    f'<span style="color:{_sc};font-size:12px;font-weight:700">{_score:.0f}</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+                # Invisible button overlaid on the card via CSS — clicking the card jumps to the signal
+                if st.button(" ", key=f"reg_{_ex}_{_rank}", use_container_width=True):
                     st.session_state["_jump_to"] = _s["symbol"]
                     st.rerun()
     st.divider()
