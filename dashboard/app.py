@@ -651,7 +651,10 @@ with _c2:
         st.session_state[_ck] = not _chart_big
         st.rerun()
 
-if chart_path and Path(chart_path).exists():
+_chart_is_url = chart_path and chart_path.startswith("http")
+_chart_is_local = chart_path and not _chart_is_url and Path(chart_path).exists()
+
+if _chart_is_url or _chart_is_local:
     if _chart_big:
         st.image(chart_path, use_container_width=True)
     else:

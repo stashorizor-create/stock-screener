@@ -39,6 +39,7 @@ from themes.refresher import load_hot_themes
 from themes.classifier import classify_stock_theme
 from scoring.scorer import compute_composite_score
 from charts.generator import generate_chart
+from charts.uploader import upload_chart
 
 logging.basicConfig(
     level=logging.INFO,
@@ -418,7 +419,9 @@ def main() -> None:
         try:
             path = generate_chart(df, sig, sym)
             chart_paths[sym] = path
-            sig["chart_image_path"] = str(path)
+            # Upload to Supabase Storage; fall back to local path if upload fails
+            url = upload_chart(path, sym, today.isoformat())
+            sig["chart_image_path"] = url or str(path)
         except Exception as exc:
             logger.warning("Chart failed for %s: %s", sym, exc)
 

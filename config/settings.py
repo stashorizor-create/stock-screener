@@ -16,6 +16,10 @@ class Settings:
     # Anthropic
     ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
 
+    # Supabase REST + Storage
+    SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")
+    SUPABASE_SERVICE_KEY: str = os.getenv("SUPABASE_SERVICE_KEY", "")
+
     # Finnhub (Phase 3)
     FINNHUB_API_KEY: str = os.getenv("FINNHUB_API_KEY", "")
 
