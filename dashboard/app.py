@@ -154,20 +154,33 @@ section[data-testid="stSidebar"] > div:first-child { padding-top: 0 !important; 
 }
 
 /* Sidebar radio — style as list */
-div[data-testid="stRadio"] > div { gap: 2px; }
+div[data-testid="stRadio"] > div { gap: 6px; }
 div[data-testid="stRadio"] label {
     background: #161b22;
     border-radius: 6px;
-    padding: 7px 10px !important;
+    padding: 9px 12px !important;
     cursor: pointer;
     border: 1px solid transparent;
     font-size: 13px;
+    line-height: 1.5;
 }
 div[data-testid="stRadio"] label:has(input:checked) {
     border-color: #4488FF;
     background: #1a2a4a;
 }
 div[data-testid="stRadio"] label > div:first-child { display: none; }
+/* Rank number — muted */
+div[data-testid="stRadio"] label span.rank { color: #484f58; font-size: 11px; }
+/* Strategy badge inside radio label */
+div[data-testid="stRadio"] label code {
+    background: #21262d !important;
+    border: 1px solid #30363d !important;
+    border-radius: 4px !important;
+    color: #8b949e !important;
+    font-size: 10px !important;
+    padding: 1px 5px !important;
+    font-family: inherit !important;
+}
 
 /* Hide Streamlit top header, hamburger menu, footer */
 header[data-testid="stHeader"] { display: none !important; }
@@ -474,9 +487,8 @@ with st.sidebar:
 
     score_color_char = lambda s: ("🟢" if s >= 75 else ("🟡" if s >= 60 else "🔴"))
     labels = [
-        f"{score_color_char(s['composite_score'])}  #{i+1}  {s['symbol']:<8}  "
-        f"{s['composite_score']:.0f}  "
-        f"{BADGE_LABELS.get(s['strategies_fired'][0], '?') if s.get('strategies_fired') else '?'}"
+        f"#{i+1} {score_color_char(s['composite_score'])} **{s['symbol']}**"
+        f" `{BADGE_LABELS.get(s['strategies_fired'][0], '?') if s.get('strategies_fired') else '?'}`"
         for i, s in enumerate(filtered)
     ]
 
