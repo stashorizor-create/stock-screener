@@ -141,16 +141,6 @@ div[data-testid="stButton"]:has(button p:contains("🌡️")) button:hover {
     color: #a5d6ff !important;
 }
 
-/* Expand chart button — subtle */
-div[data-testid="stButton"]:has(button p:contains("⛶")) button,
-div[data-testid="stButton"]:has(button p:contains("✕")) button {
-    font-size: 11px !important;
-    padding: 3px 8px !important;
-    background: #21262d !important;
-    border: 1px solid #30363d !important;
-    color: #7d8590 !important;
-    border-radius: 4px !important;
-}
 
 /* Mobile: wrap strip cells to 3-per-row */
 @media (max-width: 640px) {
@@ -407,16 +397,14 @@ with st.sidebar:
     chosen = st.radio("Signals", labels, label_visibility="collapsed")
     sig = filtered[labels.index(chosen)]
 
+    st.divider()
+    if st.button("🌡️  Market Overview", key="market_toggle", use_container_width=True):
+        st.session_state["market_open"] = not st.session_state.get("market_open", False)
+
 
 # ---------------------------------------------------------------------------
 # Main content
 # ---------------------------------------------------------------------------
-
-# ===== MARKET OVERVIEW — glowing centre button + panel =====
-_mkt_col1, _mkt_col2, _mkt_col3 = st.columns([1, 2, 1])
-with _mkt_col2:
-    if st.button("🌡️  Market Overview", key="market_toggle", use_container_width=True):
-        st.session_state["market_open"] = not st.session_state.get("market_open", False)
 
 if st.session_state.get("market_open", False):
     _sector_df = get_sector_returns()
@@ -539,22 +527,11 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Chart — compact by default, expand button to go full-width
+# Chart
 chart_path = charts.get(sig["symbol"])
-_ck = f"chart_big_{sig['symbol']}"
-_chart_big = st.session_state.get(_ck, False)
-_ch1, _ch2 = st.columns([8, 1])
-with _ch2:
-    if st.button("⛶ Expand" if not _chart_big else "✕ Shrink", key=f"chbtn_{sig['symbol']}"):
-        st.session_state[_ck] = not _chart_big
-        st.rerun()
 if chart_path and Path(chart_path).exists():
-    if _chart_big:
-        st.image(chart_path, use_container_width=True)
-    else:
-        _ci, _ = st.columns([3, 2])
-        with _ci:
-            st.image(chart_path, use_container_width=True)
+    st.caption("Synthetic chart — real OHLCV loads after first pipeline run")
+    st.image(chart_path, use_container_width=True)
 else:
     st.info("Chart not available.")
 
