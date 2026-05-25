@@ -354,15 +354,16 @@ def main() -> None:
 
         m = meta_map.get(symbol, {})
         result.update({
-            "exchange":        m.get("exchange", ""),
-            "currency":        m.get("currency", ""),
-            "company_name":    m.get("name", symbol),
-            "date":            today.isoformat(),
-            "rs_rank":         round(rs, 1),
-            "entry_price":     _safe_round(entry),
-            "stop_price":      _safe_round(stop),
-            "target_price":    _safe_round(target),
-            "risk_reward":     _safe_round((target - entry) / risk, 2) if (target and risk > 0) else None,
+            "exchange":          m.get("exchange", ""),
+            "currency":          m.get("currency", ""),
+            "company_name":      m.get("name", symbol),
+            "date":              today.isoformat(),
+            "rs_rank":           round(rs, 1),
+            "entry_price":       _safe_round(entry),
+            "stop_price":        _safe_round(stop),
+            "target_price":      _safe_round(target),
+            "risk_reward":       _safe_round((target - entry) / risk, 2) if (target and risk > 0) else None,
+            "close_at_signal":   _safe_round(float(df["close"].iloc[-1])),
         })
         raw_signals.append(result)
 
@@ -419,11 +420,23 @@ def main() -> None:
         try:
             path = generate_chart(df, sig, sym)
             chart_paths[sym] = path
-            # Upload to Supabase Storage; fall back to local path if upload fails
             url = upload_chart(path, sym, today.isoformat())
             sig["chart_image_path"] = url or str(path)
         except Exception as exc:
             logger.warning("Chart failed for %s: %s", sym, exc)
+            continue
+
+        # Per-strategy charts for multi-strategy stocks — one focused chart per strategy
+        strats = sig.get("strategies_fired", [])
+        if len(strats) > 1:
+            for strat in strats:
+                sub_sig = {**sig, "strategies_fired": [strat]}
+                try:
+                    sub_path = generate_chart(df, sub_sig, f"{sym}_{strat}")
+                    sub_url = upload_chart(sub_path, f"{sym}_{strat}", today.isoformat())
+                    sig[f"chart_{strat}"] = sub_url or str(sub_path)
+                except Exception as exc:
+                    logger.warning("Per-strategy chart failed for %s/%s: %s", sym, strat, exc)
 
     # ------------------------------------------------------------------
     # 8. AI batch assessment

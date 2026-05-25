@@ -169,6 +169,11 @@ div[data-testid="stRadio"] label:has(input:checked) {
 }
 div[data-testid="stRadio"] label > div:first-child { display: none; }
 
+/* Hide Streamlit top header, hamburger menu, footer */
+header[data-testid="stHeader"] { display: none !important; }
+#MainMenu { visibility: hidden !important; }
+footer { visibility: hidden !important; }
+
 /* Hide Streamlit's built-in image fullscreen button */
 button[title="View fullscreen"] { display: none !important; }
 
@@ -395,11 +400,14 @@ def expand_to_rows(signals: list[dict]) -> list[dict]:
         for strat in strats:
             detail = sig.get("signals", {}).get(strat, {})
             row = {**sig, "strategies_fired": [strat]}
-            # Use per-strategy entry price when available
             if detail.get("pivot_price"):
                 row["entry_price"] = detail["pivot_price"]
             elif detail.get("entry_trigger"):
                 row["entry_price"] = detail["entry_trigger"]
+            # Use the focused per-strategy chart if the pipeline generated one
+            per_chart = sig.get(f"chart_{strat}")
+            if per_chart:
+                row["chart_image_path"] = per_chart
             rows.append(row)
     return rows
 
@@ -429,15 +437,21 @@ with st.sidebar:
         _err = get_last_load_error()
         st.warning(_err if _err else "Showing mock data")
         st.info(_debug_db())
-    st.divider()
 
-    strat_filter = st.selectbox(
-        "Strategy", ["All", "VCP", "Qullamaggie", "5 EMA Pullback", "Buyable Gap Up", "Pocket Pivot"]
-    )
+    # Filters — compact layout, no divider needed before them
+    _fc1, _fc2 = st.columns(2)
+    with _fc1:
+        strat_filter = st.selectbox(
+            "Strategy",
+            ["All", "VCP", "Qullamaggie", "5 EMA Pullback", "Buyable Gap Up", "Pocket Pivot"],
+            label_visibility="collapsed",
+        )
+    with _fc2:
+        exch_filter = st.selectbox(
+            "Exchange", ["All", "STO", "OSL", "CPH", "HEL", "NASDAQ", "NYSE"],
+            label_visibility="collapsed",
+        )
     min_score = st.slider("Min score", 0, 100, 60, format="≥ %d")
-    exch_filter = st.selectbox(
-        "Exchange", ["All", "STO", "OSL", "CPH", "HEL", "NASDAQ", "NYSE"]
-    )
 
     filtered = [
         s for s in ALL_ROWS
@@ -464,7 +478,18 @@ with st.sidebar:
         f"{BADGE_LABELS.get(s['strategies_fired'][0], '?') if s.get('strategies_fired') else '?'}"
         for i, s in enumerate(filtered)
     ]
-    chosen = st.radio("Signals", labels, label_visibility="collapsed")
+
+    # Jump-to from regional top 5 click
+    _jump_to = st.session_state.get("_jump_to")
+    if "_jump_to" in st.session_state:
+        del st.session_state["_jump_to"]
+    _default_idx = 0
+    if _jump_to:
+        _jump_idx = next((i for i, s in enumerate(filtered) if s["symbol"] == _jump_to), None)
+        if _jump_idx is not None:
+            _default_idx = _jump_idx
+
+    chosen = st.radio("Signals", labels, index=_default_idx, label_visibility="collapsed")
     sig = filtered[labels.index(chosen)]
 
     st.divider()
@@ -603,18 +628,14 @@ if _regional and len(_regional) > 1:
                 _score = _s.get("composite_score", 0)
                 _sc = "#3fb950" if _score >= 75 else ("#e3b341" if _score >= 60 else "#f85149")
                 _strats = _s.get("strategies_fired", [])
-                _b = badges_html(_strats[:1]) if _strats else ""
-                st.markdown(
-                    f'<div style="display:flex;align-items:center;gap:6px;'
-                    f'padding:5px 8px;background:#161b22;border-radius:6px;'
-                    f'border:1px solid #21262d;margin-bottom:4px;cursor:pointer">'
-                    f'<span style="color:#484f58;font-size:10px;min-width:14px">#{_rank}</span>'
-                    f'<span style="font-weight:700;font-size:13px;color:#e6edf3;flex:1">{_s["symbol"]}</span>'
-                    f'{_b}'
-                    f'<span style="color:{_sc};font-size:12px;font-weight:700">{_score:.0f}</span>'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
+                _badge_txt = BADGE_LABELS.get(_strats[0], "?") if _strats else "?"
+                if st.button(
+                    f"#{_rank}  {_s['symbol']}  {_badge_txt}  {_score:.0f}",
+                    key=f"reg_{_ex}_{_rank}",
+                    use_container_width=True,
+                ):
+                    st.session_state["_jump_to"] = _s["symbol"]
+                    st.rerun()
     st.divider()
 
 # ===== SIGNAL DETAIL =====
@@ -637,17 +658,34 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# Breakout freshness — warn if signal is stale
+from datetime import date as _date_cls
+_sig_date_str = sig.get("date", "")
+if _sig_date_str:
+    try:
+        _days_old = (_date_cls.today() - _date_cls.fromisoformat(_sig_date_str)).days
+        if _days_old == 0:
+            st.success("✓ Fresh signal — detected today")
+        elif _days_old == 1:
+            st.warning("⚠ Signal is 1 day old — verify entry is still at pivot before acting")
+        elif _days_old > 1:
+            st.error(f"⚠ Signal is {_days_old} days old — price may have moved significantly past the pivot")
+    except Exception:
+        pass
+
 # Chart — use stored path from pipeline run, fall back to None
 chart_path = sig.get("chart_image_path") or None
 _ck = f"chart_big_{sig['symbol']}"
 _chart_big = st.session_state.get(_ck, False)
 
-_c1, _c2 = st.columns([11, 1])
+_c1, _c2 = st.columns([9, 2])
 with _c1:
     _chart_label = "Pipeline chart" if _data_source == "live" else "Synthetic chart — run pipeline to generate real charts"
     st.caption(_chart_label)
 with _c2:
-    if st.button("✕" if _chart_big else "⛶", key=f"chbtn_{sig['symbol']}", use_container_width=True):
+    _btn_label = "✕ Collapse" if _chart_big else "⤢ Full chart"
+    if st.button(_btn_label, key=f"chbtn_{sig['symbol']}", use_container_width=True,
+                 help="Expand chart to full width / collapse back to preview"):
         st.session_state[_ck] = not _chart_big
         st.rerun()
 
