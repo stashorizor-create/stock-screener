@@ -91,6 +91,18 @@ def load_signals(run_date: date | None = None) -> tuple[list[dict], str]:
     target_date = run_date or date.today()
 
     global _last_load_error
+
+    # --- Try Supabase REST API first (works on Streamlit Cloud) ---
+    try:
+        import streamlit as st
+        supa_url = st.secrets.get("SUPABASE_URL", "")
+        supa_key = st.secrets.get("SUPABASE_KEY", "")
+        if supa_url and supa_key:
+            return _load_via_supabase(supa_url, supa_key, target_date)
+    except Exception:
+        pass  # not running in Streamlit context, fall through to SQLAlchemy
+
+    # --- Fall back to direct SQLAlchemy (local dev) ---
     try:
         from config.settings import settings
         if not settings.DATABASE_URL:
@@ -120,6 +132,79 @@ def load_signals(run_date: date | None = None) -> tuple[list[dict], str]:
         _last_load_error = str(exc)
         logger.warning("DB load failed (%s) — using mock data", exc)
         return _mock_fallback()
+
+
+def _load_via_supabase(url: str, key: str, target_date) -> tuple[list[dict], str]:
+    """Load alerts via Supabase REST API (HTTPS — works on Streamlit Cloud)."""
+    global _last_load_error
+    try:
+        from supabase import create_client
+        client = create_client(url, key)
+
+        resp = (
+            client.table("alerts")
+            .select("*, universe(name, exchange, currency)")
+            .eq("date", str(target_date))
+            .order("confidence_score", desc=True)
+            .execute()
+        )
+
+        rows = resp.data or []
+        if not rows:
+            _last_load_error = f"No alerts in DB for {target_date}"
+            return _mock_fallback()
+
+        signals = [_supabase_row_to_signal(r) for r in rows]
+        logger.info("Loaded %d signals via Supabase REST for %s", len(signals), target_date)
+        return signals, "live"
+
+    except Exception as exc:
+        _last_load_error = str(exc)
+        logger.warning("Supabase REST failed (%s) — using mock data", exc)
+        return _mock_fallback()
+
+
+def _supabase_row_to_signal(row: dict) -> dict:
+    """Convert a Supabase REST API row to the signal dict the dashboard expects."""
+    universe = row.get("universe") or {}
+    strategies_fired = []
+    ai_narrative = row.get("ai_narrative") or ""
+
+    if ai_narrative.startswith("["):
+        end = ai_narrative.find("]")
+        if end != -1:
+            tag_str = ai_narrative[1:end]
+            strategies_fired = [t.strip() for t in tag_str.split(",") if t.strip()]
+            ai_narrative = ai_narrative[end + 1:].strip()
+
+    return {
+        "symbol":            row.get("symbol", ""),
+        "company_name":      universe.get("name") or row.get("symbol", ""),
+        "exchange":          universe.get("exchange") or "",
+        "currency":          universe.get("currency") or "",
+        "date":              row.get("date") or "",
+        "composite_score":   row.get("confidence_score") or 0,
+        "rs_rank":           None,
+        "strategies_fired":  strategies_fired,
+        "entry_price":       row.get("entry_price"),
+        "stop_price":        row.get("stop_price"),
+        "target_price":      row.get("target_price"),
+        "risk_reward":       row.get("risk_reward"),
+        "pattern_quality":   row.get("pattern_quality"),
+        "ai_narrative":      ai_narrative,
+        "chart_image_path":  row.get("chart_image_path"),
+        "eps_yoy":           None,
+        "eps_qoq":           None,
+        "revenue_yoy":       None,
+        "revenue_qoq":       None,
+        "earnings_days_out": None,
+        "insider_buy_days_ago": None,
+        "news_sentiment":    None,
+        "news_count_7d":     None,
+        "google_trends_chg": None,
+        "theme_name":        None,
+        "pattern_notes":     ai_narrative,
+    }
 
 
 _last_load_error: str = ""
