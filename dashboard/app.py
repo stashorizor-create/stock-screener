@@ -41,7 +41,7 @@ st.markdown("""
 <style>
 /* Remove top padding — main and sidebar */
 .block-container { padding-top: 0 !important; margin-top: -2rem !important; }
-section[data-testid="stSidebar"] > div:first-child { padding-top: 0.5rem !important; }
+section[data-testid="stSidebar"] > div:first-child { padding-top: 0 !important; margin-top: -2rem !important; }
 
 /* Metric strip */
 .strip {
