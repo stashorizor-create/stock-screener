@@ -5,6 +5,7 @@ Called from run.py after each chart is saved locally.
 from __future__ import annotations
 
 import logging
+from datetime import date, timedelta
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,37 @@ def _get_client():
     except Exception as exc:
         logger.warning("Supabase client init failed: %s", exc)
         return None
+
+
+def cleanup_old_charts(keep_days: int = 7) -> None:
+    """
+    Delete chart folders from Supabase Storage older than keep_days.
+    Folders are named YYYY-MM-DD — anything before the cutoff is removed.
+    """
+    client = _get_client()
+    if client is None:
+        return
+
+    cutoff = date.today() - timedelta(days=keep_days)
+    try:
+        folders = client.storage.from_("charts").list()
+        for item in folders:
+            name = item.get("name", "")
+            try:
+                folder_date = date.fromisoformat(name)
+            except ValueError:
+                continue  # not a date folder, skip
+            if folder_date >= cutoff:
+                continue
+
+            # List every file inside the old folder and delete them all
+            files = client.storage.from_("charts").list(name)
+            paths = [f"{name}/{f['name']}" for f in files if f.get("name")]
+            if paths:
+                client.storage.from_("charts").remove(paths)
+                logger.info("Deleted %d old charts from folder %s", len(paths), name)
+    except Exception as exc:
+        logger.warning("Chart cleanup failed (non-fatal): %s", exc)
 
 
 def upload_chart(local_path: Path, symbol: str, run_date: str) -> str | None:

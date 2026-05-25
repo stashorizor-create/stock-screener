@@ -39,7 +39,7 @@ from themes.refresher import load_hot_themes
 from themes.classifier import classify_stock_theme
 from scoring.scorer import compute_composite_score
 from charts.generator import generate_chart
-from charts.uploader import upload_chart
+from charts.uploader import upload_chart, cleanup_old_charts
 
 logging.basicConfig(
     level=logging.INFO,
@@ -408,8 +408,9 @@ def main() -> None:
     raw_signals.sort(key=lambda s: s["composite_score"], reverse=True)
 
     # ------------------------------------------------------------------
-    # 7. Chart generation
+    # 7. Chart generation  (clean up old storage first)
     # ------------------------------------------------------------------
+    cleanup_old_charts(keep_days=7)
     chart_paths: dict[str, Path] = {}
     logger.info("Generating charts for %d signals...", len(raw_signals))
     for sig in raw_signals:
