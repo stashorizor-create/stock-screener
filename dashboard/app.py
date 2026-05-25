@@ -500,11 +500,21 @@ if st.session_state.get("market_open", False):
                     f'<span style="font-size:10px;font-weight:600;color:{m_color};'
                     f'background:{m_color}22;border-radius:4px;padding:2px 6px">{momentum.upper()}</span>'
                     f'</div>'
-                    f'<div style="color:#7d8590;font-size:11px;line-height:1.5;margin-bottom:4px">'
+                    f'<div style="color:#7d8590;font-size:11px;line-height:1.5;margin-bottom:6px">'
                     f'{theme["description"]}</div>'
-                    f'<div style="color:#484f58;font-size:10px">Examples: '
+                    f'<div style="color:#484f58;font-size:10px;margin-bottom:2px">🇺🇸 US: '
                     f'<span style="color:#388bfd">{tickers}</span></div>'
-                    f'</div>',
+                    + (
+                        f'<div style="color:#484f58;font-size:10px;margin-bottom:2px">🇪🇺 Europe: '
+                        f'<span style="color:#58a6ff">{", ".join(theme.get("european_tickers", []))}</span></div>'
+                        if theme.get("european_tickers") else ""
+                    )
+                    + (
+                        f'<div style="color:#484f58;font-size:10px">🇸🇪 Scandinavia: '
+                        f'<span style="color:#79c0ff">{", ".join(theme.get("scandinavian_tickers", []))}</span></div>'
+                        if theme.get("scandinavian_tickers") else ""
+                    )
+                    + f'</div>',
                     unsafe_allow_html=True,
                 )
 

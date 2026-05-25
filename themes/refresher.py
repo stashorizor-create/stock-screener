@@ -144,7 +144,11 @@ For each theme provide:
 - A display name (e.g. "AI Infrastructure")
 - 2 sentences: what companies/sub-industries make up this theme, and what macro catalyst is driving it right now
 - 3-5 example US-listed ticker symbols that best represent this theme
+- 2-4 example European ticker symbols (LSE, Euronext, Xetra) that fit this theme — use the local exchange ticker (e.g. ASML, SAP, SHELL, SIE)
+- 2-4 example Scandinavian ticker symbols (Stockholm, Oslo, Copenhagen, Helsinki) that fit this theme — use local tickers (e.g. ERIC B, VOLV B, NOVO B, EQNR)
 - Momentum level: "high", "medium", or "emerging"
+
+If a theme has no relevant European or Scandinavian stocks, return an empty list for those fields.
 
 Return ONLY valid JSON, no commentary, no markdown fences:
 {{
@@ -154,6 +158,8 @@ Return ONLY valid JSON, no commentary, no markdown fences:
       "name": "Display Name",
       "description": "Two sentences on the theme and its catalyst.",
       "example_tickers": ["TICK1", "TICK2", "TICK3"],
+      "european_tickers": ["TICK1", "TICK2"],
+      "scandinavian_tickers": ["TICK1", "TICK2"],
       "momentum": "high"
     }}
   }}
