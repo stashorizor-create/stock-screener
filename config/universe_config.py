@@ -162,7 +162,7 @@ EXCHANGES: dict[str, ExchangeConfig] = {
 EXCLUDED_INSTRUMENT_TYPES = {"warrant", "etf", "reit", "preferred", "certificate", "fund"}
 
 NORDIC_EXCHANGES   = {"OSL", "STO", "CPH", "HEL"}
-EUROPEAN_EXCHANGES = {"DE", "PAR", "AMS", "MIL", "MAD", "BRU", "LON", "CHE"}
+EUROPEAN_EXCHANGES = {"PAR", "AMS", "MIL", "MAD", "BRU", "LON", "CHE"}
 US_EXCHANGES       = {"NYSE", "NASDAQ"}
 ALL_EXCHANGES      = set(EXCHANGES.keys())
 

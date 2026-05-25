@@ -480,6 +480,24 @@ with st.sidebar:
         st.warning(_err if _err else "Showing mock data")
         st.info(_debug_db())
 
+    # Region selector — Nordic is primary
+    _REGION_EXCHANGES = {
+        "Nordic":  {"STO", "OSL", "CPH", "HEL"},
+        "Europe":  {"PAR", "AMS", "MIL", "MAD", "BRU", "LON", "CHE"},
+        "US":      {"NYSE", "NASDAQ"},
+        "All":     None,
+    }
+    _REGION_EXCH_OPTIONS = {
+        "Nordic":  ["All", "STO", "OSL", "CPH", "HEL"],
+        "Europe":  ["All", "PAR", "AMS", "MIL", "MAD", "BRU", "LON", "CHE"],
+        "US":      ["All", "NYSE", "NASDAQ"],
+        "All":     ["All", "STO", "OSL", "CPH", "HEL", "PAR", "AMS", "MIL", "MAD", "BRU", "LON", "CHE", "NYSE", "NASDAQ"],
+    }
+    region_filter = st.radio(
+        "Region", ["Nordic", "Europe", "US", "All"],
+        horizontal=True, index=0, label_visibility="collapsed",
+    )
+
     # Filters — compact layout, no divider needed before them
     _fc1, _fc2 = st.columns(2)
     with _fc1:
@@ -490,16 +508,19 @@ with st.sidebar:
         )
     with _fc2:
         exch_filter = st.selectbox(
-            "Exchange", ["All", "STO", "OSL", "CPH", "HEL", "DE", "PAR", "AMS", "MIL", "MAD", "BRU", "LON", "CHE", "NYSE", "NASDAQ"],
+            "Exchange", _REGION_EXCH_OPTIONS[region_filter],
             label_visibility="collapsed",
+            key=f"exch_sel_{region_filter}",
         )
     min_score = st.slider("Min score", 0, 100, 60, format="≥ %d")
 
+    _region_set = _REGION_EXCHANGES[region_filter]
     filtered = [
         s for s in ALL_ROWS
         if s["composite_score"] >= min_score
         and (strat_filter == "All" or STRAT_MAP.get(strat_filter) in s["strategies_fired"])
         and (exch_filter == "All" or s["exchange"] == exch_filter)
+        and (_region_set is None or s["exchange"] in _region_set)
     ]
 
     unique_stocks = len({s["symbol"] for s in filtered})
