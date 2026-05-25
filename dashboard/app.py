@@ -177,34 +177,6 @@ footer { visibility: hidden !important; }
 /* Hide Streamlit's built-in image fullscreen button */
 button[title="View fullscreen"] { display: none !important; }
 
-/* Regional top 5 — card + button fused into one visual unit */
-.reg-card { border-radius: 6px 6px 0 0 !important; margin-bottom: 0 !important; }
-div[data-testid="stMarkdownContainer"]:has(.reg-card) { margin-bottom: 0 !important; }
-div[data-testid="stMarkdownContainer"]:has(.reg-card) + div[data-testid="stButton"] {
-    margin-top: 0 !important;
-    margin-bottom: 6px !important;
-}
-div[data-testid="stMarkdownContainer"]:has(.reg-card) + div[data-testid="stButton"] button {
-    background: #0d1117 !important;
-    border: 1px solid #21262d !important;
-    border-top: none !important;
-    border-radius: 0 0 6px 6px !important;
-    box-shadow: none !important;
-    color: #388bfd !important;
-    font-size: 10px !important;
-    height: auto !important;
-    letter-spacing: 0.5px !important;
-    line-height: 1.5 !important;
-    min-height: 0 !important;
-    padding: 2px 0 !important;
-    text-align: center !important;
-}
-div[data-testid="stMarkdownContainer"]:has(.reg-card) + div[data-testid="stButton"] button:hover {
-    background: #161b22 !important;
-    color: #79c0ff !important;
-    border-color: #388bfd66 !important;
-    border-top: none !important;
-}
 
 /* Market overview button — centered glow */
 div[data-testid="stButton"]:has(button p:contains("🌡️")) button {
@@ -508,17 +480,7 @@ with st.sidebar:
         for i, s in enumerate(filtered)
     ]
 
-    # Jump-to from regional top 5 click
-    _jump_to = st.session_state.get("_jump_to")
-    if "_jump_to" in st.session_state:
-        del st.session_state["_jump_to"]
-    _default_idx = 0
-    if _jump_to:
-        _jump_idx = next((i for i, s in enumerate(filtered) if s["symbol"] == _jump_to), None)
-        if _jump_idx is not None:
-            _default_idx = _jump_idx
-
-    chosen = st.radio("Signals", labels, index=_default_idx, label_visibility="collapsed")
+    chosen = st.radio("Signals", labels, label_visibility="collapsed")
     sig = filtered[labels.index(chosen)]
 
     st.divider()
@@ -659,9 +621,9 @@ if _regional and len(_regional) > 1:
                 _strats = _s.get("strategies_fired", [])
                 _b = badges_html(_strats[:1]) if _strats else ""
                 st.markdown(
-                    f'<div class="reg-card" style="display:flex;align-items:center;gap:6px;'
-                    f'padding:5px 8px;background:#161b22;'
-                    f'border:1px solid #21262d">'
+                    f'<div style="display:flex;align-items:center;gap:6px;'
+                    f'padding:5px 8px;background:#161b22;border-radius:6px;'
+                    f'border:1px solid #21262d;margin-bottom:4px;cursor:pointer">'
                     f'<span style="color:#484f58;font-size:10px;min-width:14px">#{_rank}</span>'
                     f'<span style="font-weight:700;font-size:13px;color:#e6edf3;flex:1">{_s["symbol"]}</span>'
                     f'{_b}'
@@ -669,9 +631,6 @@ if _regional and len(_regional) > 1:
                     f'</div>',
                     unsafe_allow_html=True,
                 )
-                if st.button("↗ open", key=f"reg_{_ex}_{_rank}", use_container_width=True):
-                    st.session_state["_jump_to"] = _s["symbol"]
-                    st.rerun()
     st.divider()
 
 # ===== SIGNAL DETAIL =====
