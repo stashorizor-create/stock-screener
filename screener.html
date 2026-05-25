@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Stock Screener</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0d1117;
+      color: #e6edf3;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .card {
+      text-align: center;
+      padding: 56px 48px;
+      background: #161b22;
+      border: 1px solid #21262d;
+      border-radius: 16px;
+      max-width: 480px;
+      width: calc(100% - 32px);
+    }
+
+    .icon {
+      font-size: 48px;
+      margin-bottom: 20px;
+      display: block;
+    }
+
+    h1 {
+      font-size: 26px;
+      font-weight: 700;
+      letter-spacing: -0.4px;
+      margin-bottom: 10px;
+    }
+
+    p {
+      color: #7d8590;
+      font-size: 14px;
+      line-height: 1.6;
+      margin-bottom: 36px;
+    }
+
+    .btn {
+      display: inline-block;
+      padding: 14px 36px;
+      background: linear-gradient(135deg, #0d1b35 0%, #1a2d4a 100%);
+      color: #79c0ff;
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 0.4px;
+      text-decoration: none;
+      border-radius: 12px;
+      border: 1px solid #388bfd55;
+      box-shadow: 0 0 18px #388bfd55, 0 0 40px #388bfd22;
+      transition: box-shadow 0.25s ease, border-color 0.25s ease, color 0.25s ease;
+    }
+
+    .btn:hover {
+      box-shadow: 0 0 32px #388bfd99, 0 0 64px #388bfd44;
+      border-color: #388bfdaa;
+      color: #a5d6ff;
+    }
+
+    .footer {
+      margin-top: 32px;
+      font-size: 11px;
+      color: #484f58;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <span class="icon">📈</span>
+    <h1>AI Stock Screener</h1>
+    <p>Momentum signals across US and Nordic markets — powered by pattern recognition and AI analysis.</p>
+    <a class="btn" href="https://stock-screener-nvue9g3ik3jyfmzbjd7nms.streamlit.app/" target="_blank" rel="noopener">
+      Launch Screener
+    </a>
+    <div class="footer">Password protected &nbsp;·&nbsp; Personal use only</div>
+  </div>
+</body>
+</html>

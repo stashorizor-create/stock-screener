@@ -212,8 +212,11 @@ def _build_multi_figure(
             y=1.01,
         )
 
-        last_ts = df.index[-1]
-        run_date = str(last_ts.date() if hasattr(last_ts, "date") else pd.Timestamp(last_ts).date())
+        if "date" in df.columns:
+            run_date = str(pd.to_datetime(df["date"].iloc[-1]).date())
+        else:
+            last_ts = df.index[-1]
+            run_date = str(last_ts.date() if hasattr(last_ts, "date") else pd.Timestamp(last_ts).date())
         out_path = out_dir / f"{symbol}_{run_date}.png"
         fig_out.savefig(
             str(out_path),
@@ -234,7 +237,11 @@ def _build_multi_figure(
 def _prepare_df(df: pd.DataFrame, lookback_days: int) -> pd.DataFrame:
     plot_df = df.tail(lookback_days).copy()
     if not isinstance(plot_df.index, pd.DatetimeIndex):
-        plot_df.index = pd.to_datetime(plot_df.index)
+        if "date" in plot_df.columns:
+            plot_df = plot_df.set_index("date")
+            plot_df.index = pd.to_datetime(plot_df.index)
+        else:
+            plot_df.index = pd.to_datetime(plot_df.index)
     return plot_df
 
 

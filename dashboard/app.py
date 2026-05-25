@@ -16,10 +16,12 @@ sys.path.insert(0, str(ROOT))
 
 import streamlit as st
 
-from dashboard.mock_data import MOCK_SIGNALS, make_df_for, _scale
+from dashboard.data_loader import (
+    load_signals, top_overall, top_by_region,
+    get_last_load_error,
+    EXCHANGE_FLAGS, EXCHANGE_NAMES,
+)
 from dashboard.market import fetch_sector_returns
-from charts.generator import generate_chart
-from screening.indicators import compute_all
 from themes.refresher import load_hot_themes
 
 # ---------------------------------------------------------------------------
@@ -201,18 +203,29 @@ div[data-testid="stButton"]:has(button p:contains("🌡️")) button:hover {
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------------------------
-# Chart cache
+# Signal data (cached 5 min — refreshes automatically on rerun)
 # ---------------------------------------------------------------------------
 
-@st.cache_resource
-def build_all_charts() -> dict[str, str]:
-    paths = {}
-    for s in MOCK_SIGNALS:
-        df = _scale(make_df_for(s["_seed"]), s["_price"])
-        df = compute_all(df)
-        path = generate_chart(df, s, s["symbol"])
-        paths[s["symbol"]] = str(path)
-    return paths
+@st.cache_data(ttl=300, show_spinner=False)
+def get_signals() -> tuple[list[dict], str]:
+    return load_signals()
+
+
+def _debug_db():
+    """Call without cache to diagnose connection issues."""
+    from config.settings import settings
+    db_url = settings.DATABASE_URL
+    if not db_url:
+        return "❌ DATABASE_URL is empty — .env not loading"
+    masked = db_url[:30] + "..."
+    try:
+        from database.models import Alert, SessionLocal
+        from datetime import date
+        with SessionLocal() as s:
+            count = s.query(Alert).filter(Alert.date == date.today()).count()
+        return f"✅ Connected ({masked}) — {count} alerts today"
+    except Exception as e:
+        return f"❌ DB error: {e}"
 
 
 # ---------------------------------------------------------------------------
@@ -392,11 +405,11 @@ def expand_to_rows(signals: list[dict]) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Sidebar — filters + ranked list
+# Load signals
 # ---------------------------------------------------------------------------
 
-ALL_ROWS = expand_to_rows(MOCK_SIGNALS)
-charts = build_all_charts()
+ALL_SIGNALS, _data_source = get_signals()
+ALL_ROWS = expand_to_rows(ALL_SIGNALS)
 
 STRAT_MAP = {
     "VCP": "vcp", "Qullamaggie": "qullamaggie",
@@ -404,8 +417,18 @@ STRAT_MAP = {
     "Pocket Pivot": "pocket_pivot",
 }
 
+# ---------------------------------------------------------------------------
+# Sidebar — filters + ranked list
+# ---------------------------------------------------------------------------
+
 with st.sidebar:
-    st.caption("Last updated: 2026-05-25  ·  mock data")
+    _run_date = ALL_SIGNALS[0]["date"] if ALL_SIGNALS else "—"
+    _source_label = "live" if _data_source == "live" else "mock data"
+    st.caption(f"Last updated: {_run_date}  ·  {_source_label}")
+    if _data_source == "mock":
+        _err = get_last_load_error()
+        st.warning(_err if _err else "Showing mock data")
+        st.info(_debug_db())
     st.divider()
 
     strat_filter = st.selectbox(
@@ -413,7 +436,7 @@ with st.sidebar:
     )
     min_score = st.slider("Min score", 0, 100, 60, format="≥ %d")
     exch_filter = st.selectbox(
-        "Exchange", ["All", "STO", "CPH", "OSL", "NASDAQ", "NYSE"]
+        "Exchange", ["All", "STO", "OSL", "CPH", "HEL", "NASDAQ", "NYSE"]
     )
 
     filtered = [
@@ -561,9 +584,42 @@ if st.session_state.get("market_open", False):
 
 st.divider()
 
+# ===== REGIONAL TOP 5 =====
+
+_regional = top_by_region(ALL_SIGNALS)
+if _regional and len(_regional) > 1:
+    st.markdown("**Top 5 by Region**")
+    _reg_cols = st.columns(len(_regional))
+    for _col, (_ex, _sigs) in zip(_reg_cols, _regional.items()):
+        _flag = EXCHANGE_FLAGS.get(_ex, "")
+        _name = EXCHANGE_NAMES.get(_ex, _ex)
+        with _col:
+            st.markdown(
+                f'<div style="font-size:12px;font-weight:700;color:#7d8590;'
+                f'margin-bottom:6px">{_flag} {_name}</div>',
+                unsafe_allow_html=True,
+            )
+            for _rank, _s in enumerate(_sigs, 1):
+                _score = _s.get("composite_score", 0)
+                _sc = "#3fb950" if _score >= 75 else ("#e3b341" if _score >= 60 else "#f85149")
+                _strats = _s.get("strategies_fired", [])
+                _b = badges_html(_strats[:1]) if _strats else ""
+                st.markdown(
+                    f'<div style="display:flex;align-items:center;gap:6px;'
+                    f'padding:5px 8px;background:#161b22;border-radius:6px;'
+                    f'border:1px solid #21262d;margin-bottom:4px;cursor:pointer">'
+                    f'<span style="color:#484f58;font-size:10px;min-width:14px">#{_rank}</span>'
+                    f'<span style="font-weight:700;font-size:13px;color:#e6edf3;flex:1">{_s["symbol"]}</span>'
+                    f'{_b}'
+                    f'<span style="color:{_sc};font-size:12px;font-weight:700">{_score:.0f}</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+    st.divider()
+
 # ===== SIGNAL DETAIL =====
 # Fetch real sentiment, overlay on mock values
-live = fetch_live_enrichment(sig["symbol"], sig.get("_trends_keyword", sig["symbol"]))
+live = fetch_live_enrichment(sig["symbol"], sig.get("company_name") or sig["symbol"])
 display = {**sig, **{k: v for k, v in live.items() if v is not None}}
 
 # Header
@@ -581,14 +637,15 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Chart — caption + expand button share one row, no double-button
-chart_path = charts.get(sig["symbol"])
+# Chart — use stored path from pipeline run, fall back to None
+chart_path = sig.get("chart_image_path") or None
 _ck = f"chart_big_{sig['symbol']}"
 _chart_big = st.session_state.get(_ck, False)
 
 _c1, _c2 = st.columns([11, 1])
 with _c1:
-    st.caption("Synthetic chart — real OHLCV loads after first pipeline run")
+    _chart_label = "Pipeline chart" if _data_source == "live" else "Synthetic chart — run pipeline to generate real charts"
+    st.caption(_chart_label)
 with _c2:
     if st.button("✕" if _chart_big else "⛶", key=f"chbtn_{sig['symbol']}", use_container_width=True):
         st.session_state[_ck] = not _chart_big

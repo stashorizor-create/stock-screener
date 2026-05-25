@@ -11,5 +11,6 @@ build/
 .pytest_cache/
 *.log
 charts/output/
+output/
 *.db
 .streamlit/secrets.toml

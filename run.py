@@ -2,21 +2,25 @@
 Nightly pipeline runner.
 
 Usage:
-    python run.py                   # full Nordic run
-    python run.py --limit 100       # test on first 100 instruments
-    python run.py --dry-run         # no DB writes, prints summary
-    python run.py --skip-ai         # skip Claude AI assessment
-    python run.py --skip-themes     # skip theme classification
-    python run.py --exchange STO    # single exchange only (STO/OSL/CPH/HEL)
-    python run.py --min-score 65    # only keep signals above this score
+    python run.py                           # full Nordic run
+    python run.py --limit 100               # test on first 100 instruments
+    python run.py --dry-run                 # no DB writes, prints summary
+    python run.py --skip-ai                 # skip Claude AI assessment
+    python run.py --skip-themes             # skip theme classification
+    python run.py --exchange STO            # single exchange only (STO/OSL/CPH/HEL)
+    python run.py --min-score 65            # only keep signals above this score
+    python run.py --from-checkpoint FILE    # skip pipeline, retry DB write from saved JSON
 """
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+
+import numpy as np
 
 ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT))
@@ -26,7 +30,7 @@ import pandas as pd
 from config.settings import settings
 from config.universe_config import EXCHANGES
 from data.ingestor import client as borsdata
-from database.models import Alert, SessionLocal
+from database.models import Alert, Universe, SessionLocal
 from screening.indicators import compute_all, rank_rs_across_universe
 from screening.filters import apply_all_hard_filters
 from screening.strategies.runner import run_all_strategies
@@ -66,12 +70,14 @@ STOCK_INSTRUMENT_TYPE = 0   # Borsdata: 0 = common stock
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="AI Stock Screener pipeline")
-    p.add_argument("--limit",       type=int,   default=0,    help="Max instruments (0=all)")
-    p.add_argument("--dry-run",     action="store_true",      help="Skip DB writes")
-    p.add_argument("--skip-ai",     action="store_true",      help="Skip AI assessment")
-    p.add_argument("--skip-themes", action="store_true",      help="Skip theme classification")
-    p.add_argument("--exchange",    default="",               help="Filter exchange (STO/OSL/CPH/HEL)")
-    p.add_argument("--min-score",   type=float, default=60.0, help="Min composite score for alerts")
+    p.add_argument("--limit",            type=int,   default=0,    help="Max instruments (0=all)")
+    p.add_argument("--dry-run",          action="store_true",      help="Skip DB writes")
+    p.add_argument("--skip-ai",          action="store_true",      help="Skip AI assessment")
+    p.add_argument("--skip-themes",      action="store_true",      help="Skip theme classification")
+    p.add_argument("--exchange",         default="",               help="Filter exchange (STO/OSL/CPH/HEL)")
+    p.add_argument("--min-score",        type=float, default=60.0, help="Min composite score for alerts")
+    p.add_argument("--from-checkpoint",  default="",  metavar="FILE",
+                   help="Path to pipeline_YYYY-MM-DD.json — skip pipeline, retry DB write only")
     return p.parse_args()
 
 
@@ -82,8 +88,135 @@ def _safe_round(v, decimals: int = 4):
         return None
 
 
+def _json_default(obj):
+    """JSON encoder for numpy scalars produced by pandas ranking."""
+    if isinstance(obj, np.bool_):
+        return bool(obj)
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.floating):
+        return float(obj)
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    raise TypeError(f"Not JSON serializable: {type(obj)}")
+
+
+def _print_summary(raw_signals: list[dict], ai_results: dict) -> None:
+    logger.info("\n%s", "=" * 68)
+    logger.info("%-10s  %-6s  %-5s  %-10s  %-4s  %s",
+                "Symbol", "Score", "RS", "Strategies", "PQ", "Theme")
+    logger.info("-" * 68)
+    for sig in raw_signals:
+        ai    = ai_results.get(sig["symbol"], {})
+        strat = "+".join(s[:3].upper() for s in sig.get("strategies_fired", []))
+        logger.info("%-10s  %-6.0f  %-5.0f  %-10s  %-4s  %s",
+                    sig["symbol"],
+                    sig.get("composite_score", 0),
+                    sig.get("rs_rank", 0),
+                    strat,
+                    str(ai.get("pattern_quality", "—")),
+                    sig.get("theme_name", ""))
+    logger.info("=" * 68)
+    logger.info("Total: %d signals  |  %d with AI assessment", len(raw_signals), len(ai_results))
+
+
+def _write_db(raw_signals: list[dict], ai_results: dict, meta_map: dict,
+              run_date: date, dry_run: bool) -> None:
+    if dry_run:
+        logger.info("Dry run — skipping DB writes.")
+        return
+
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+    logger.info("Writing alerts to Supabase...")
+    with SessionLocal() as session:
+        # Upsert universe rows first — alerts.symbol FK references universe.symbol.
+        # Omit borsdata_id to avoid unique-constraint conflicts on retries.
+        universe_rows = [
+            {
+                "symbol":       sym,
+                "name":         m.get("name", sym),
+                "exchange":     m.get("exchange", ""),
+                "currency":     m.get("currency", ""),
+                "is_active":    True,
+                "last_updated": datetime.now(timezone.utc),
+            }
+            for sym, m in meta_map.items()
+        ]
+        stmt = pg_insert(Universe).values(universe_rows)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["symbol"],
+            set_={
+                "name":         stmt.excluded.name,
+                "exchange":     stmt.excluded.exchange,
+                "currency":     stmt.excluded.currency,
+                "is_active":    True,
+                "last_updated": stmt.excluded.last_updated,
+            },
+        )
+        session.execute(stmt)
+        session.flush()
+        logger.info("Universe upserted: %d rows", len(universe_rows))
+
+        # Only remove alerts for symbols in this run — preserves other exchanges' alerts
+        symbols_this_run = [sig["symbol"] for sig in raw_signals]
+        session.query(Alert).filter(
+            Alert.date == run_date,
+            Alert.symbol.in_(symbols_this_run),
+        ).delete(synchronize_session=False)
+        for sig in raw_signals:
+            ai         = ai_results.get(sig["symbol"], {})
+            confidence = float(ai.get("confidence_score") or sig.get("composite_score") or 0)
+            strat_tag  = "[" + ",".join(sig.get("strategies_fired", [])) + "]"
+            narrative  = f"{strat_tag} {ai.get('ai_narrative', '')}".strip()
+            session.add(Alert(
+                symbol=sig["symbol"],
+                date=run_date,
+                entry_price=_safe_round(sig.get("entry_price")),
+                stop_price=_safe_round(sig.get("stop_price")),
+                target_price=_safe_round(sig.get("target_price")),
+                risk_reward=_safe_round(sig.get("risk_reward"), 2),
+                confidence_score=round(confidence, 1),
+                pattern_quality=int(ai.get("pattern_quality") or 0),
+                ai_narrative=narrative,
+                chart_image_path=sig.get("chart_image_path"),
+                sent_at=datetime.now(timezone.utc),
+            ))
+        session.commit()
+
+    logger.info("Done. %d alerts written for %s.", len(raw_signals), run_date)
+
+
+def _resume_from_checkpoint(args: argparse.Namespace) -> None:
+    """Load a saved pipeline JSON and retry only the DB write."""
+    cp_path = Path(args.from_checkpoint)
+    if not cp_path.exists():
+        cp_path = ROOT / "output" / args.from_checkpoint
+    if not cp_path.exists():
+        logger.error("Checkpoint file not found: %s", args.from_checkpoint)
+        sys.exit(1)
+
+    with open(cp_path) as f:
+        cp = json.load(f)
+
+    raw_signals = cp["signals"]
+    ai_results  = cp["ai_results"]
+    meta_map    = cp["meta_map"]
+    run_date    = date.fromisoformat(cp["date"])
+
+    logger.info("Loaded checkpoint %s: %d signals, %d AI results, date %s",
+                cp_path.name, len(raw_signals), len(ai_results), run_date)
+
+    _print_summary(raw_signals, ai_results)
+    _write_db(raw_signals, ai_results, meta_map, run_date, args.dry_run)
+
+
 def main() -> None:
     args = parse_args()
+
+    if args.from_checkpoint:
+        _resume_from_checkpoint(args)
+        return
 
     missing = settings.validate()
     if missing:
@@ -130,13 +263,13 @@ def main() -> None:
     n_skip   = 0
 
     for i, (_, row) in enumerate(instruments_df.iterrows()):
-        ins_id   = int(row["insId"])
-        symbol   = str(row.get("ticker") or f"BD{ins_id}")
-        name     = str(row.get("name", symbol))
+        ins_id    = int(row["insId"])
+        symbol    = str(row.get("ticker") or f"BD{ins_id}")
+        name      = str(row.get("name", symbol))
         market_id = int(row["marketId"])
-        exchange = MARKET_ID_TO_EXCHANGE.get(market_id, "UNK")
-        currency = str(row.get("stockPriceCurrency", ""))
-        exc_cfg  = EXCHANGES.get(exchange)
+        exchange  = MARKET_ID_TO_EXCHANGE.get(market_id, "UNK")
+        currency  = str(row.get("stockPriceCurrency", ""))
+        exc_cfg   = EXCHANGES.get(exchange)
 
         if i % 100 == 0 and i > 0:
             logger.info("  %d / %d  |  Stage-2 passers: %d", i, n_total, n_stage2)
@@ -158,10 +291,11 @@ def main() -> None:
 
         # 63-day return for RS ranking (collected for ALL symbols)
         if len(df) >= 64 and df["close"].iloc[-64] > 0:
-            raw_returns[symbol] = (df["close"].iloc[-1] / df["close"].iloc[-64]) - 1
+            raw_returns[symbol] = float(
+                (df["close"].iloc[-1] / df["close"].iloc[-64]) - 1
+            )
 
         # Convert value threshold → share count (Borsdata volumes are always in shares).
-        # Use 10-day avg close as the price reference — same window as the volume check.
         close_10d = float(df["close"].tail(10).mean()) if len(df) >= 10 else float(df["close"].iloc[-1])
         min_price = exc_cfg.min_price if exc_cfg else 0.0
         if exc_cfg and exc_cfg.volume_unit == "value" and close_10d > 0:
@@ -202,7 +336,7 @@ def main() -> None:
     raw_signals: list[dict] = []
 
     for symbol, df in passing_dfs.items():
-        rs = rs_ranks.get(symbol, 0.0)
+        rs = float(rs_ranks.get(symbol, 0.0))   # cast np.float64 → float
         if rs > 0 and rs < RS_MIN_PERCENTILE:
             continue
 
@@ -301,57 +435,33 @@ def main() -> None:
             ai_results[r["symbol"]] = r
 
     # ------------------------------------------------------------------
+    # 8b. Checkpoint — save everything needed to retry DB write
+    # ------------------------------------------------------------------
+    output_dir = ROOT / "output"
+    output_dir.mkdir(exist_ok=True)
+    cp_path = output_dir / f"pipeline_{today.isoformat()}.json"
+    cp_data = {
+        "date":       today.isoformat(),
+        "signals":    raw_signals,
+        "ai_results": ai_results,
+        "meta_map":   meta_map,
+    }
+    try:
+        with open(cp_path, "w") as f:
+            json.dump(cp_data, f, default=_json_default, indent=2)
+        logger.info("Checkpoint saved → %s", cp_path)
+    except Exception as exc:
+        logger.warning("Checkpoint save failed (non-fatal): %s", exc)
+
+    # ------------------------------------------------------------------
     # 9. Summary
     # ------------------------------------------------------------------
-    logger.info("\n%s", "=" * 68)
-    logger.info("%-10s  %-6s  %-5s  %-10s  %-4s  %s",
-                "Symbol", "Score", "RS", "Strategies", "PQ", "Theme")
-    logger.info("-" * 68)
-    for sig in raw_signals:
-        ai    = ai_results.get(sig["symbol"], {})
-        strat = "+".join(s[:3].upper() for s in sig.get("strategies_fired", []))
-        logger.info("%-10s  %-6.0f  %-5.0f  %-10s  %-4s  %s",
-                    sig["symbol"],
-                    sig.get("composite_score", 0),
-                    sig.get("rs_rank", 0),
-                    strat,
-                    str(ai.get("pattern_quality", "—")),
-                    sig.get("theme_name", ""))
-    logger.info("=" * 68)
-    logger.info("Total: %d signals  |  %d with AI assessment", len(raw_signals), len(ai_results))
+    _print_summary(raw_signals, ai_results)
 
     # ------------------------------------------------------------------
     # 10. Write to DB
     # ------------------------------------------------------------------
-    if args.dry_run:
-        logger.info("Dry run — skipping DB writes.")
-        return
-
-    logger.info("Writing alerts to Supabase...")
-    with SessionLocal() as session:
-        session.query(Alert).filter(Alert.date == today).delete()
-        for sig in raw_signals:
-            ai         = ai_results.get(sig["symbol"], {})
-            confidence = ai.get("confidence_score") or sig.get("composite_score", 0)
-            # Pack strategies into the narrative prefix so the dashboard can read them
-            strat_tag  = "[" + ",".join(sig.get("strategies_fired", [])) + "]"
-            narrative  = f"{strat_tag} {ai.get('ai_narrative', '')}".strip()
-            session.add(Alert(
-                symbol=sig["symbol"],
-                date=today,
-                entry_price=sig.get("entry_price"),
-                stop_price=sig.get("stop_price"),
-                target_price=sig.get("target_price"),
-                risk_reward=sig.get("risk_reward"),
-                confidence_score=round(confidence, 1),
-                pattern_quality=ai.get("pattern_quality") or 0,
-                ai_narrative=narrative,
-                chart_image_path=sig.get("chart_image_path"),
-                sent_at=datetime.utcnow(),
-            ))
-        session.commit()
-
-    logger.info("Done. %d alerts written for %s.", len(raw_signals), today)
+    _write_db(raw_signals, ai_results, meta_map, today, args.dry_run)
 
 
 if __name__ == "__main__":
