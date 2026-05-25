@@ -41,13 +41,23 @@ def _check_password() -> bool:
     if st.session_state.get("_auth_ok"):
         return True
 
+    # Resolve the password from secrets — try [auth].password then flat password key.
+    # FileNotFoundError means no secrets.toml at all (local dev) → open access.
+    # Secrets present but key missing → block with config error so the mistake is visible.
+    correct = None
+    dev_mode = False
     try:
-        correct = st.secrets["auth"]["password"]
-    except (KeyError, FileNotFoundError):
-        correct = None  # no secret set — open access in dev
+        auth_section = st.secrets.get("auth") or {}
+        correct = auth_section.get("password") or st.secrets.get("password")
+    except FileNotFoundError:
+        dev_mode = True
 
-    if correct is None:
-        return True
+    if dev_mode:
+        return True  # local dev, no secrets file
+
+    if not correct:
+        st.error("Auth not configured: add `[auth]\\npassword = \"...\"` to Streamlit Cloud secrets.")
+        st.stop()
 
     def _submit():
         if st.session_state.get("_pw_input") == correct:
