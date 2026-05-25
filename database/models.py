@@ -143,6 +143,11 @@ class Alert(Base):
     fit_strength = Column(Text)
     theme_score = Column(Float)
     pattern_notes = Column(Text)
+    eps_yoy = Column(Float)
+    eps_qoq = Column(Float)
+    revenue_yoy = Column(Float)
+    revenue_qoq = Column(Float)
+    earnings_days_out = Column(Integer)
 
 
 class StrategyParams(Base):

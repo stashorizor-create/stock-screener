@@ -194,6 +194,11 @@ def _write_db(raw_signals: list[dict], ai_results: dict, meta_map: dict,
                 fit_strength=sig.get("fit_strength") or "",
                 theme_score=float(sig.get("theme_score") or 0),
                 pattern_notes=sig.get("pattern_notes") or "",
+                eps_yoy=sig.get("eps_yoy"),
+                eps_qoq=sig.get("eps_qoq"),
+                revenue_yoy=sig.get("revenue_yoy"),
+                revenue_qoq=sig.get("revenue_qoq"),
+                earnings_days_out=sig.get("earnings_days_out"),
             ))
         session.commit()
 
@@ -329,7 +334,7 @@ def main() -> None:
 
         n_eligible += 1
         passing_dfs[symbol] = df
-        meta_map[symbol] = {"name": name, "exchange": exchange, "currency": currency}
+        meta_map[symbol] = {"name": name, "exchange": exchange, "currency": currency, "borsdata_id": ins_id}
 
     logger.info("OHLCV pass done: %d / %d eligible  (%d skipped)",
                 n_eligible, n_total, n_skip)
@@ -409,13 +414,29 @@ def main() -> None:
             sig["theme_score"] = 0
 
     # ------------------------------------------------------------------
-    # 6. Composite scoring
+    # 6. Fundamentals from Borsdata (quarterly reports)
+    # ------------------------------------------------------------------
+    logger.info("Fetching fundamentals for %d signals...", len(raw_signals))
+    for sig in raw_signals:
+        ins_id = meta_map.get(sig["symbol"], {}).get("borsdata_id")
+        if ins_id:
+            try:
+                fund = borsdata.get_fundamentals(ins_id)
+                sig.update(fund)
+            except Exception as exc:
+                logger.warning("Fundamentals failed for %s: %s", sig["symbol"], exc)
+
+    # ------------------------------------------------------------------
+    # 7. Composite scoring
     # ------------------------------------------------------------------
     for sig in raw_signals:
         sig.update(compute_composite_score(
             runner_score=sig.get("composite_score", 0),
             theme_score=sig.get("theme_score", 0),
             rs_rank=sig.get("rs_rank"),
+            eps_yoy=sig.get("eps_yoy"),
+            revenue_yoy=sig.get("revenue_yoy"),
+            eps_qoq=sig.get("eps_qoq"),
         ))
 
     raw_signals.sort(key=lambda s: s["composite_score"], reverse=True)
