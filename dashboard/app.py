@@ -416,7 +416,7 @@ def _insider(days_ago) -> str:
 def _price_fmt(sig: dict, price: float | None) -> str:
     if price is None:
         return "—"
-    sym = {"USD": "$", "DKK": "kr", "SEK": "kr", "NOK": "kr"}.get(sig["currency"], "")
+    sym = {"USD": "$", "EUR": "€", "GBP": "£", "CHF": "CHF ", "DKK": "kr", "SEK": "kr", "NOK": "kr"}.get(sig["currency"], "")
     return f"{sym}{price:,.2f}"
 
 
@@ -490,7 +490,7 @@ with st.sidebar:
         )
     with _fc2:
         exch_filter = st.selectbox(
-            "Exchange", ["All", "STO", "OSL", "CPH", "HEL", "NASDAQ", "NYSE"],
+            "Exchange", ["All", "STO", "OSL", "CPH", "HEL", "DE", "PAR", "AMS", "MIL", "MAD", "BRU", "LON", "CHE", "NYSE", "NASDAQ"],
             label_visibility="collapsed",
         )
     min_score = st.slider("Min score", 0, 100, 60, format="≥ %d")

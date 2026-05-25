@@ -28,7 +28,7 @@ sys.path.insert(0, str(ROOT))
 import pandas as pd
 
 from config.settings import settings
-from config.universe_config import EXCHANGES
+from config.universe_config import EXCHANGES, NORDIC_MARKET_IDS, NORDIC_EXCHANGES, EUROPEAN_EXCHANGES, US_EXCHANGES
 from data.ingestor import client as borsdata
 from database.models import Alert, Universe, SessionLocal
 from screening.indicators import compute_all, rank_rs_across_universe
@@ -51,8 +51,7 @@ logger = logging.getLogger(__name__)
 HISTORY_DAYS      = 420      # enough for 200-SMA + 52-week levels + buffer
 RS_MIN_PERCENTILE = 70.0     # top 30% relative strength required
 
-# Borsdata marketId → our exchange code
-# Indices (isIndex=True) are intentionally excluded.
+# Borsdata marketId → our exchange code (indices excluded)
 MARKET_ID_TO_EXCHANGE: dict[int, str] = {
     # Sweden — Stockholm
     1: "STO", 2: "STO", 3: "STO", 4: "STO", 5: "STO", 6: "STO",
@@ -62,8 +61,25 @@ MARKET_ID_TO_EXCHANGE: dict[int, str] = {
     14: "HEL", 15: "HEL", 16: "HEL", 17: "HEL", 30: "HEL",
     # Denmark — Copenhagen
     20: "CPH", 21: "CPH", 22: "CPH", 23: "CPH", 48: "CPH",
-    # US (uncomment to include)
-    # 32: "NYSE", 33: "NASDAQ",
+    # US
+    32: "NYSE", 33: "NASDAQ",
+    # Europe (Borsdata global endpoint)
+    38: "LON",   # London Stock Exchange
+    39: "DE",    # Stuttgart / Germany
+    40: "PAR",   # Euronext Paris
+    41: "MAD",   # BME Madrid
+    43: "MIL",   # Borsa Italiana
+    44: "CHE",   # SIX Swiss Exchange
+    45: "BRU",   # Euronext Brussels
+    46: "AMS",   # Euronext Amsterdam
+}
+
+# Region → set of exchange codes (used by --region flag)
+REGION_EXCHANGES: dict[str, set[str]] = {
+    "nordic":  NORDIC_EXCHANGES,
+    "europe":  EUROPEAN_EXCHANGES,
+    "us":      US_EXCHANGES,
+    "all":     set(MARKET_ID_TO_EXCHANGE.values()),
 }
 
 STOCK_INSTRUMENT_TYPE = 0   # Borsdata: 0 = common stock
@@ -75,7 +91,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dry-run",          action="store_true",      help="Skip DB writes")
     p.add_argument("--skip-ai",          action="store_true",      help="Skip AI assessment")
     p.add_argument("--skip-themes",      action="store_true",      help="Skip theme classification")
-    p.add_argument("--exchange",         default="",               help="Filter exchange (STO/OSL/CPH/HEL)")
+    p.add_argument("--exchange",         default="",               help="Single exchange (STO/OSL/DE/NYSE/...)")
+    p.add_argument("--region",           default="nordic",
+                   choices=["nordic", "europe", "us", "all"],
+                   help="Market region to run (default: nordic)")
     p.add_argument("--min-score",        type=float, default=65.0, help="Min composite score for AI assessment")
     p.add_argument("--from-checkpoint",  default="",  metavar="FILE",
                    help="Path to pipeline_YYYY-MM-DD.json — skip pipeline, retry DB write only")
@@ -248,21 +267,42 @@ def main() -> None:
     # ------------------------------------------------------------------
     # 1. Universe
     # ------------------------------------------------------------------
-    logger.info("Fetching instruments from Borsdata...")
-    instruments_df = borsdata.get_instruments()
-    if instruments_df.empty:
-        logger.error("No instruments returned — check BORSDATA_API_KEY")
-        sys.exit(1)
 
-    # Keep only common stocks in known Nordic exchanges
+    # Resolve which exchange codes to include
+    if args.exchange:
+        target_exchanges = {args.exchange}
+    else:
+        target_exchanges = REGION_EXCHANGES.get(args.region, NORDIC_EXCHANGES)
+
+    target_market_ids = {
+        mid for mid, ex in MARKET_ID_TO_EXCHANGE.items()
+        if ex in target_exchanges
+    }
+    needs_nordic = bool(target_market_ids & NORDIC_MARKET_IDS)
+    needs_global = bool(target_market_ids - NORDIC_MARKET_IDS)
+
+    logger.info("Fetching instruments from Borsdata (region=%s, exchanges=%s)...",
+                args.region, sorted(target_exchanges))
+
+    dfs = []
+    if needs_nordic:
+        nordic_df = borsdata.get_instruments()
+        if nordic_df.empty:
+            logger.error("No Nordic instruments returned — check BORSDATA_API_KEY")
+            sys.exit(1)
+        dfs.append(nordic_df)
+    if needs_global:
+        global_df = borsdata.get_instruments_global()
+        if global_df.empty:
+            logger.error("No global instruments returned — check BORSDATA_API_KEY")
+            sys.exit(1)
+        dfs.append(global_df)
+
+    instruments_df = pd.concat(dfs, ignore_index=True).drop_duplicates(subset=["insId"])
     instruments_df = instruments_df[
         (instruments_df["instrument"] == STOCK_INSTRUMENT_TYPE)
-        & instruments_df["marketId"].isin(MARKET_ID_TO_EXCHANGE)
+        & instruments_df["marketId"].isin(target_market_ids)
     ].copy()
-
-    if args.exchange:
-        target_ids = {mid for mid, ex in MARKET_ID_TO_EXCHANGE.items() if ex == args.exchange}
-        instruments_df = instruments_df[instruments_df["marketId"].isin(target_ids)]
 
     if args.limit:
         instruments_df = instruments_df.head(args.limit)

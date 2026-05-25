@@ -24,6 +24,14 @@ EXCHANGE_FLAGS = {
     "HEL": "🇫🇮",
     "NYSE":   "🇺🇸",
     "NASDAQ": "🇺🇸",
+    "DE":  "🇩🇪",
+    "PAR": "🇫🇷",
+    "AMS": "🇳🇱",
+    "MIL": "🇮🇹",
+    "MAD": "🇪🇸",
+    "BRU": "🇧🇪",
+    "LON": "🇬🇧",
+    "CHE": "🇨🇭",
 }
 EXCHANGE_NAMES = {
     "STO": "Stockholm",
@@ -32,6 +40,14 @@ EXCHANGE_NAMES = {
     "HEL": "Helsinki",
     "NYSE":   "NYSE",
     "NASDAQ": "Nasdaq US",
+    "DE":  "Germany",
+    "PAR": "Paris",
+    "AMS": "Amsterdam",
+    "MIL": "Milan",
+    "MAD": "Madrid",
+    "BRU": "Brussels",
+    "LON": "London",
+    "CHE": "Switzerland",
 }
 
 

@@ -21,7 +21,7 @@ EXCHANGES: dict[str, ExchangeConfig] = {
         currency="NOK",
         min_avg_volume=5_000_000,   # NOK value/day
         volume_unit="value",
-        min_price=10.0,             # no penny stocks
+        min_price=10.0,
         timezone="Europe/Oslo",
         market_close_hour=17,
     ),
@@ -55,6 +55,88 @@ EXCHANGES: dict[str, ExchangeConfig] = {
         timezone="Europe/Helsinki",
         market_close_hour=18,
     ),
+    # ---- Continental Europe (Borsdata global endpoint) ----
+    "DE": ExchangeConfig(
+        name="Stuttgart (Germany)",
+        country="DE",
+        currency="EUR",
+        min_avg_volume=10_000_000,  # EUR value/day  (same as US, in EUR)
+        volume_unit="value",
+        min_price=5.0,
+        timezone="Europe/Berlin",
+        market_close_hour=17,
+    ),
+    "PAR": ExchangeConfig(
+        name="Euronext Paris",
+        country="FR",
+        currency="EUR",
+        min_avg_volume=10_000_000,
+        volume_unit="value",
+        min_price=5.0,
+        timezone="Europe/Paris",
+        market_close_hour=17,
+    ),
+    "AMS": ExchangeConfig(
+        name="Euronext Amsterdam",
+        country="NL",
+        currency="EUR",
+        min_avg_volume=10_000_000,
+        volume_unit="value",
+        min_price=5.0,
+        timezone="Europe/Amsterdam",
+        market_close_hour=17,
+    ),
+    "MIL": ExchangeConfig(
+        name="Borsa Italiana",
+        country="IT",
+        currency="EUR",
+        min_avg_volume=10_000_000,
+        volume_unit="value",
+        min_price=5.0,
+        timezone="Europe/Rome",
+        market_close_hour=17,
+    ),
+    "MAD": ExchangeConfig(
+        name="BME Madrid",
+        country="ES",
+        currency="EUR",
+        min_avg_volume=10_000_000,
+        volume_unit="value",
+        min_price=5.0,
+        timezone="Europe/Madrid",
+        market_close_hour=17,
+    ),
+    "BRU": ExchangeConfig(
+        name="Euronext Brussels",
+        country="BE",
+        currency="EUR",
+        min_avg_volume=10_000_000,
+        volume_unit="value",
+        min_price=5.0,
+        timezone="Europe/Brussels",
+        market_close_hour=17,
+    ),
+    "LON": ExchangeConfig(
+        name="London Stock Exchange",
+        country="GB",
+        currency="GBP",
+        min_avg_volume=8_000_000,   # GBP — approx EUR 10M equivalent
+        volume_unit="value",
+        min_price=100.0,            # LSE prices often in pence, skip sub-100p stocks
+        timezone="Europe/London",
+        market_close_hour=16,
+    ),
+    "CHE": ExchangeConfig(
+        name="SIX Swiss Exchange",
+        country="CH",
+        currency="CHF",
+        min_avg_volume=10_000_000,  # CHF — approx EUR 10M equivalent
+        volume_unit="value",
+        min_price=5.0,
+        timezone="Europe/Zurich",
+        market_close_hour=17,
+    ),
+    # ---- US ----
     "NYSE": ExchangeConfig(
         name="New York Stock Exchange",
         country="US",
@@ -79,6 +161,16 @@ EXCHANGES: dict[str, ExchangeConfig] = {
 
 EXCLUDED_INSTRUMENT_TYPES = {"warrant", "etf", "reit", "preferred", "certificate", "fund"}
 
-NORDIC_EXCHANGES = {"OSL", "STO", "CPH", "HEL"}
-US_EXCHANGES = {"NYSE", "NASDAQ"}
-ALL_EXCHANGES = set(EXCHANGES.keys())
+NORDIC_EXCHANGES   = {"OSL", "STO", "CPH", "HEL"}
+EUROPEAN_EXCHANGES = {"DE", "PAR", "AMS", "MIL", "MAD", "BRU", "LON", "CHE"}
+US_EXCHANGES       = {"NYSE", "NASDAQ"}
+ALL_EXCHANGES      = set(EXCHANGES.keys())
+
+# Borsdata-internal market IDs that are only available via get_instruments()
+# (Nordic endpoint). Everything else comes from get_instruments_global().
+NORDIC_MARKET_IDS: frozenset[int] = frozenset({
+    1, 2, 3, 4, 5, 6,           # Stockholm
+    9, 10, 11, 12, 27, 78,      # Oslo
+    14, 15, 16, 17, 30,         # Helsinki
+    20, 21, 22, 23, 48,         # Copenhagen
+})
