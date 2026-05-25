@@ -39,8 +39,9 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-/* No top padding */
-.block-container { padding-top: 0 !important; }
+/* Remove top padding — main and sidebar */
+.block-container { padding-top: 0 !important; margin-top: -2rem !important; }
+section[data-testid="stSidebar"] > div:first-child { padding-top: 0.5rem !important; }
 
 /* Metric strip */
 .strip {
