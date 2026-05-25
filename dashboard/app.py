@@ -358,8 +358,7 @@ STRAT_MAP = {
 }
 
 with st.sidebar:
-    st.markdown("## 📈 Screener")
-    st.caption("2026-05-25  ·  mock data")
+    st.caption("Last updated: 2026-05-25  ·  mock data")
     st.divider()
 
     strat_filter = st.selectbox(
