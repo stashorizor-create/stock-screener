@@ -543,15 +543,15 @@ if st.session_state.get("market_open", False):
                     f'</div>'
                     f'<div style="color:#7d8590;font-size:11px;line-height:1.5;margin-bottom:6px">'
                     f'{theme["description"]}</div>'
-                    f'<div style="color:#484f58;font-size:10px;margin-bottom:2px">🇺🇸 US: '
+                    f'<div style="color:#484f58;font-size:10px;margin-bottom:2px">🇺🇸 '
                     f'<span style="color:#388bfd">{tickers}</span></div>'
                     + (
-                        f'<div style="color:#484f58;font-size:10px;margin-bottom:2px">🇪🇺 Europe: '
+                        f'<div style="color:#484f58;font-size:10px;margin-bottom:2px">🇪🇺 '
                         f'<span style="color:#58a6ff">{", ".join(theme.get("european_tickers", []))}</span></div>'
                         if theme.get("european_tickers") else ""
                     )
                     + (
-                        f'<div style="color:#484f58;font-size:10px">🇸🇪 Scandinavia: '
+                        f'<div style="color:#484f58;font-size:10px">🇸🇪 '
                         f'<span style="color:#79c0ff">{", ".join(theme.get("scandinavian_tickers", []))}</span></div>'
                         if theme.get("scandinavian_tickers") else ""
                     )

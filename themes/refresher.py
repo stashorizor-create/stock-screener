@@ -139,16 +139,17 @@ Based on this real market data, identify 5-8 currently hot investment themes.
 Prioritise themes with clear momentum: outperforming sectors, strong social chatter, and headline-driven narratives.
 Include both established high-momentum themes AND emerging ones.
 
-For each theme provide:
-- A snake_case key (e.g. "ai_infrastructure")
-- A display name (e.g. "AI Infrastructure")
-- 2 sentences: what companies/sub-industries make up this theme, and what macro catalyst is driving it right now
-- 3-5 example US-listed ticker symbols that best represent this theme
-- 2-4 example European ticker symbols (LSE, Euronext, Xetra) that fit this theme — use the local exchange ticker (e.g. ASML, SAP, SHELL, SIE)
-- 2-4 example Scandinavian ticker symbols (Stockholm, Oslo, Copenhagen, Helsinki) that fit this theme — use local tickers (e.g. ERIC B, VOLV B, NOVO B, EQNR)
-- Momentum level: "high", "medium", or "emerging"
+For EVERY theme you MUST provide all five of these fields — none are optional:
+1. example_tickers        — 3-5 US-listed tickers (NYSE/NASDAQ)
+2. european_tickers       — 2-4 tickers from LSE, Euronext, or Xetra (e.g. ASML, SAP, SHEL, SIE, STM, IFX, AIR). Use the primary local exchange symbol.
+3. scandinavian_tickers   — 2-4 tickers from Stockholm, Oslo, Copenhagen, or Helsinki (e.g. ERIC B, VOLV B, NOVO B, EQNR, NOD, NESTE). Use local symbols including any share-class suffix.
+4. momentum               — "high", "medium", or "emerging"
+5. description            — two sentences: what sub-industries compose the theme, and what macro catalyst is driving it now
 
-If a theme has no relevant European or Scandinavian stocks, return an empty list for those fields.
+CRITICAL: every theme object in the JSON MUST contain european_tickers and scandinavian_tickers as non-empty arrays.
+If the theme has no obvious European plays, include the 2 most tangentially related European names.
+If the theme has no obvious Scandinavian plays, include the 2 most tangentially related Scandinavian names.
+Do NOT omit these fields or return empty arrays.
 
 Return ONLY valid JSON, no commentary, no markdown fences:
 {{
@@ -157,9 +158,9 @@ Return ONLY valid JSON, no commentary, no markdown fences:
     "theme_key": {{
       "name": "Display Name",
       "description": "Two sentences on the theme and its catalyst.",
-      "example_tickers": ["TICK1", "TICK2", "TICK3"],
-      "european_tickers": ["TICK1", "TICK2"],
-      "scandinavian_tickers": ["TICK1", "TICK2"],
+      "example_tickers": ["US1", "US2", "US3"],
+      "european_tickers": ["EU1", "EU2"],
+      "scandinavian_tickers": ["SCAN1", "SCAN2"],
       "momentum": "high"
     }}
   }}
@@ -167,7 +168,7 @@ Return ONLY valid JSON, no commentary, no markdown fences:
 
     response = client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=1500,
+        max_tokens=2500,
         messages=[{"role": "user", "content": prompt}],
     )
 
