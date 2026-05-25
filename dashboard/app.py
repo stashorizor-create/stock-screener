@@ -422,7 +422,7 @@ STRAT_MAP = {
 # ---------------------------------------------------------------------------
 
 with st.sidebar:
-    _run_date = ALL_SIGNALS[0]["date"] if ALL_SIGNALS else "—"
+    _run_date = ALL_SIGNALS[0].get("date", "—") if ALL_SIGNALS else "—"
     _source_label = "live" if _data_source == "live" else "mock data"
     st.caption(f"Last updated: {_run_date}  ·  {_source_label}")
     if _data_source == "mock":
