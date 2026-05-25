@@ -122,6 +122,36 @@ div[data-testid="stRadio"] label:has(input:checked) {
 }
 div[data-testid="stRadio"] label > div:first-child { display: none; }
 
+/* Market overview button — centered glow */
+div[data-testid="stButton"]:has(button p:contains("🌡️")) button {
+    background: linear-gradient(135deg, #0d1b35 0%, #1a2d4a 100%) !important;
+    border: 1px solid #388bfd55 !important;
+    border-radius: 12px !important;
+    font-size: 15px !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.5px !important;
+    box-shadow: 0 0 18px #388bfd55, 0 0 40px #388bfd22 !important;
+    color: #79c0ff !important;
+    padding: 14px 0 !important;
+    transition: box-shadow 0.3s ease, border-color 0.3s ease !important;
+}
+div[data-testid="stButton"]:has(button p:contains("🌡️")) button:hover {
+    box-shadow: 0 0 32px #388bfd99, 0 0 64px #388bfd44 !important;
+    border-color: #388bfdaa !important;
+    color: #a5d6ff !important;
+}
+
+/* Expand chart button — subtle */
+div[data-testid="stButton"]:has(button p:contains("⛶")) button,
+div[data-testid="stButton"]:has(button p:contains("✕")) button {
+    font-size: 11px !important;
+    padding: 3px 8px !important;
+    background: #21262d !important;
+    border: 1px solid #30363d !important;
+    color: #7d8590 !important;
+    border-radius: 4px !important;
+}
+
 /* Mobile: wrap strip cells to 3-per-row */
 @media (max-width: 640px) {
     .cell { flex-basis: 33.33% !important; min-width: 33.33% !important; }
@@ -382,8 +412,13 @@ with st.sidebar:
 # Main content
 # ---------------------------------------------------------------------------
 
-# ===== MARKET OVERVIEW (always visible expander) =====
-with st.expander("🌡️ Market Overview — Sector Strength & Hot Themes", expanded=False):
+# ===== MARKET OVERVIEW — glowing centre button + panel =====
+_mkt_col1, _mkt_col2, _mkt_col3 = st.columns([1, 2, 1])
+with _mkt_col2:
+    if st.button("🌡️  Market Overview", key="market_toggle", use_container_width=True):
+        st.session_state["market_open"] = not st.session_state.get("market_open", False)
+
+if st.session_state.get("market_open", False):
     _sector_df = get_sector_returns()
     _themes    = get_hot_themes()
 
@@ -504,7 +539,26 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Two-column layout — all info visible without scrolling
+# Chart — compact by default, expand button to go full-width
+chart_path = charts.get(sig["symbol"])
+_ck = f"chart_big_{sig['symbol']}"
+_chart_big = st.session_state.get(_ck, False)
+_ch1, _ch2 = st.columns([8, 1])
+with _ch2:
+    if st.button("⛶ Expand" if not _chart_big else "✕ Shrink", key=f"chbtn_{sig['symbol']}"):
+        st.session_state[_ck] = not _chart_big
+        st.rerun()
+if chart_path and Path(chart_path).exists():
+    if _chart_big:
+        st.image(chart_path, use_container_width=True)
+    else:
+        _ci, _ = st.columns([3, 2])
+        with _ci:
+            st.image(chart_path, use_container_width=True)
+else:
+    st.info("Chart not available.")
+
+# Two-column layout — all info fits without scrolling
 col_left, col_right = st.columns(2)
 
 with col_left:
@@ -576,14 +630,6 @@ with col_right:
             unsafe_allow_html=True,
         )
 
-# Chart collapsed by default — click to expand
-chart_path = charts.get(sig["symbol"])
-with st.expander("📈 Chart — click to expand", expanded=False):
-    if chart_path and Path(chart_path).exists():
-        st.caption("Synthetic chart — real OHLCV loads after first pipeline run")
-        st.image(chart_path, use_container_width=True)
-    else:
-        st.info("Chart not available.")
 
 # -------------------------------------------------------------------------
 # AI Assessment
