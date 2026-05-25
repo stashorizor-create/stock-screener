@@ -34,6 +34,40 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------------------------
+# Password gate — must pass before anything renders
+# ---------------------------------------------------------------------------
+
+def _check_password() -> bool:
+    if st.session_state.get("_auth_ok"):
+        return True
+
+    try:
+        correct = st.secrets["auth"]["password"]
+    except (KeyError, FileNotFoundError):
+        correct = None  # no secret set — open access in dev
+
+    if correct is None:
+        return True
+
+    def _submit():
+        if st.session_state.get("_pw_input") == correct:
+            st.session_state["_auth_ok"] = True
+        else:
+            st.session_state["_auth_bad"] = True
+
+    st.markdown("## AI Stock Screener")
+    st.text_input("Password", type="password", key="_pw_input", on_change=_submit)
+    if st.button("Login"):
+        _submit()
+    if st.session_state.get("_auth_bad"):
+        st.error("Incorrect password.")
+        st.session_state["_auth_bad"] = False
+    return False
+
+if not _check_password():
+    st.stop()
+
+# ---------------------------------------------------------------------------
 # CSS — desktop + mobile responsive
 # ---------------------------------------------------------------------------
 
@@ -473,19 +507,16 @@ if st.session_state.get("market_open", False):
                     except Exception as _e:
                         st.error(f"Failed: {_e}")
         else:
-            _t_left, _t_right = st.columns([3, 1])
-            with _t_left:
-                st.caption(f"Generated: {_themes.get('generated_at', 'unknown')}")
-            with _t_right:
-                if st.button("Refresh", key="refresh_themes_btn2"):
-                    with st.spinner("Refreshing…"):
-                        try:
-                            from themes.refresher import refresh_hot_themes
-                            _themes = refresh_hot_themes()
-                            get_hot_themes.clear()
-                            st.rerun()
-                        except Exception as _e:
-                            st.error(f"Failed: {_e}")
+            st.caption(f"Generated: {_themes.get('generated_at', 'unknown')}")
+            if st.button("🔄 Refresh themes", key="refresh_themes_btn2", use_container_width=True):
+                with st.spinner("Refreshing…"):
+                    try:
+                        from themes.refresher import refresh_hot_themes
+                        _themes = refresh_hot_themes()
+                        get_hot_themes.clear()
+                        st.rerun()
+                    except Exception as _e:
+                        st.error(f"Failed: {_e}")
 
             MOMENTUM_COLOR = {"high": "#3fb950", "medium": "#e3b341", "emerging": "#388bfd"}
             for _key, theme in _themes.get("themes", {}).items():
