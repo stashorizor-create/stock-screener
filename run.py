@@ -167,7 +167,10 @@ def _write_db(raw_signals: list[dict], ai_results: dict, meta_map: dict,
         ).delete(synchronize_session=False)
         for sig in raw_signals:
             ai         = ai_results.get(sig["symbol"], {})
-            confidence = float(ai.get("confidence_score") or sig.get("composite_score") or 0)
+            composite  = float(sig.get("composite_score") or 0)
+            confidence = float(ai.get("confidence_score") or composite)
+            strats_json = json.dumps(sig.get("strategies_fired", []))
+            # Keep legacy text prefix so old dashboard versions still parse correctly
             strat_tag  = "[" + ",".join(sig.get("strategies_fired", [])) + "]"
             narrative  = f"{strat_tag} {ai.get('ai_narrative', '')}".strip()
             session.add(Alert(
@@ -177,11 +180,20 @@ def _write_db(raw_signals: list[dict], ai_results: dict, meta_map: dict,
                 stop_price=_safe_round(sig.get("stop_price")),
                 target_price=_safe_round(sig.get("target_price")),
                 risk_reward=_safe_round(sig.get("risk_reward"), 2),
+                composite_score=round(composite, 1),
                 confidence_score=round(confidence, 1),
                 pattern_quality=int(ai.get("pattern_quality") or 0),
                 ai_narrative=narrative,
                 chart_image_path=sig.get("chart_image_path"),
                 sent_at=datetime.now(timezone.utc),
+                rs_rank=_safe_round(sig.get("rs_rank"), 1),
+                strategies_fired=strats_json,
+                theme_name=sig.get("theme_name") or "",
+                theme_momentum=sig.get("theme_momentum") or "",
+                theme_narrative=sig.get("theme_narrative") or "",
+                fit_strength=sig.get("fit_strength") or "",
+                theme_score=float(sig.get("theme_score") or 0),
+                pattern_notes=sig.get("pattern_notes") or "",
             ))
         session.commit()
 

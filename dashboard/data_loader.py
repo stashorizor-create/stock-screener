@@ -35,19 +35,41 @@ EXCHANGE_NAMES = {
 }
 
 
-def _alert_to_signal(row) -> dict:
-    """Convert a SQLAlchemy Alert + Universe row to the signal dict shape the dashboard expects."""
-    alert, universe = row
-    strategies_fired = []
-    ai_narrative = alert.ai_narrative or ""
-
-    # Parse strategy tags from ai_narrative prefix e.g. "[vcp,qullamaggie] ..."
-    if ai_narrative.startswith("["):
-        end = ai_narrative.find("]")
+def _parse_strategies(strategies_json: str | None, ai_narrative: str) -> tuple[list[str], str]:
+    """Return (strategies_fired, clean_narrative) from the new JSON column or legacy text prefix."""
+    if strategies_json:
+        try:
+            import json
+            strats = json.loads(strategies_json)
+            if isinstance(strats, list) and strats:
+                # Strip legacy prefix from narrative if present
+                narr = ai_narrative or ""
+                if narr.startswith("["):
+                    end = narr.find("]")
+                    if end != -1:
+                        narr = narr[end + 1:].strip()
+                return strats, narr
+        except Exception:
+            pass
+    # Fall back to legacy text prefix parsing
+    narr = ai_narrative or ""
+    strats: list[str] = []
+    if narr.startswith("["):
+        end = narr.find("]")
         if end != -1:
-            tag_str = ai_narrative[1:end]
-            strategies_fired = [t.strip() for t in tag_str.split(",") if t.strip()]
-            ai_narrative = ai_narrative[end + 1:].strip()
+            tag_str = narr[1:end]
+            strats = [t.strip() for t in tag_str.split(",") if t.strip()]
+            narr = narr[end + 1:].strip()
+    return strats, narr
+
+
+def _alert_to_signal(row) -> dict:
+    """Convert a SQLAlchemy Alert + Universe row to the signal dict the dashboard expects."""
+    alert, universe = row
+    strategies_fired, ai_narrative = _parse_strategies(
+        alert.strategies_fired, alert.ai_narrative or ""
+    )
+    composite = alert.composite_score or alert.confidence_score or 0
 
     return {
         "symbol":            alert.symbol,
@@ -55,8 +77,9 @@ def _alert_to_signal(row) -> dict:
         "exchange":          universe.exchange if universe else "",
         "currency":          universe.currency if universe else "",
         "date":              alert.date.isoformat() if alert.date else "",
-        "composite_score":   alert.confidence_score or 0,
-        "rs_rank":           None,
+        "composite_score":   composite,
+        "confidence_score":  alert.confidence_score or 0,
+        "rs_rank":           alert.rs_rank,
         "strategies_fired":  strategies_fired,
         "entry_price":       alert.entry_price,
         "stop_price":        alert.stop_price,
@@ -65,7 +88,6 @@ def _alert_to_signal(row) -> dict:
         "pattern_quality":   alert.pattern_quality,
         "ai_narrative":      ai_narrative,
         "chart_image_path":  alert.chart_image_path,
-        # Enrichment — not stored in alerts yet
         "eps_yoy":           None,
         "eps_qoq":           None,
         "revenue_yoy":       None,
@@ -75,8 +97,12 @@ def _alert_to_signal(row) -> dict:
         "news_sentiment":    None,
         "news_count_7d":     None,
         "google_trends_chg": None,
-        "theme_name":        None,
-        "pattern_notes":     ai_narrative,
+        "theme_name":        alert.theme_name or None,
+        "theme_momentum":    alert.theme_momentum or None,
+        "theme_narrative":   alert.theme_narrative or None,
+        "fit_strength":      alert.fit_strength or None,
+        "theme_score":       alert.theme_score or 0,
+        "pattern_notes":     alert.pattern_notes or ai_narrative,
     }
 
 
@@ -167,15 +193,10 @@ def _load_via_supabase(url: str, key: str, target_date) -> tuple[list[dict], str
 def _supabase_row_to_signal(row: dict) -> dict:
     """Convert a Supabase REST API row to the signal dict the dashboard expects."""
     universe = row.get("universe") or {}
-    strategies_fired = []
-    ai_narrative = row.get("ai_narrative") or ""
-
-    if ai_narrative.startswith("["):
-        end = ai_narrative.find("]")
-        if end != -1:
-            tag_str = ai_narrative[1:end]
-            strategies_fired = [t.strip() for t in tag_str.split(",") if t.strip()]
-            ai_narrative = ai_narrative[end + 1:].strip()
+    strategies_fired, ai_narrative = _parse_strategies(
+        row.get("strategies_fired"), row.get("ai_narrative") or ""
+    )
+    composite = row.get("composite_score") or row.get("confidence_score") or 0
 
     return {
         "symbol":            row.get("symbol", ""),
@@ -183,8 +204,9 @@ def _supabase_row_to_signal(row: dict) -> dict:
         "exchange":          universe.get("exchange") or "",
         "currency":          universe.get("currency") or "",
         "date":              row.get("date") or "",
-        "composite_score":   row.get("confidence_score") or 0,
-        "rs_rank":           None,
+        "composite_score":   composite,
+        "confidence_score":  row.get("confidence_score") or 0,
+        "rs_rank":           row.get("rs_rank"),
         "strategies_fired":  strategies_fired,
         "entry_price":       row.get("entry_price"),
         "stop_price":        row.get("stop_price"),
@@ -202,8 +224,12 @@ def _supabase_row_to_signal(row: dict) -> dict:
         "news_sentiment":    None,
         "news_count_7d":     None,
         "google_trends_chg": None,
-        "theme_name":        None,
-        "pattern_notes":     ai_narrative,
+        "theme_name":        row.get("theme_name") or None,
+        "theme_momentum":    row.get("theme_momentum") or None,
+        "theme_narrative":   row.get("theme_narrative") or None,
+        "fit_strength":      row.get("fit_strength") or None,
+        "theme_score":       row.get("theme_score") or 0,
+        "pattern_notes":     row.get("pattern_notes") or ai_narrative,
     }
 
 

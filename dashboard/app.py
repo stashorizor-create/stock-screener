@@ -856,28 +856,6 @@ if notes:
 # Theme Classification
 # -------------------------------------------------------------------------
 
-# If theme wasn't stored in DB, classify on demand via Haiku (cached per signal)
-if not sig.get("theme_name"):
-    _tk = f"theme_{sig['symbol']}"
-    if _tk not in st.session_state:
-        _hot = get_hot_themes()
-        if _hot.get("themes"):
-            try:
-                from themes.classifier import classify_stock_theme
-                st.session_state[_tk] = classify_stock_theme(
-                    symbol=sig["symbol"],
-                    company_name=sig.get("company_name", sig["symbol"]),
-                    sector="", description="", themes=_hot,
-                )
-            except Exception:
-                st.session_state[_tk] = {}
-        else:
-            st.session_state[_tk] = {}
-    _live_theme = st.session_state.get(_tk, {})
-    if _live_theme.get("theme_name"):
-        sig = {**sig, **_live_theme}
-        display = {**display, **_live_theme}
-
 if sig.get("theme_name"):
     _t_m = (sig.get("theme_momentum") or "").lower()
     _t_color = {"strong": "#3fb950", "moderate": "#e3b341", "emerging": "#388bfd"}.get(_t_m, "#7d8590")

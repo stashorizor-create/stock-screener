@@ -128,11 +128,21 @@ class Alert(Base):
     stop_price = Column(Float)
     target_price = Column(Float)
     risk_reward = Column(Float)
-    confidence_score = Column(Float)    # 0-100 composite
-    pattern_quality = Column(Integer)   # 1-10 from Claude
+    composite_score = Column(Float)     # Python scorer output (0-100)
+    confidence_score = Column(Float)    # AI-blended confidence (0-100)
+    pattern_quality = Column(Integer)   # 1-10 from Claude vision
     ai_narrative = Column(Text)
     chart_image_path = Column(String(300))
     sent_at = Column(DateTime)
+    # Rich signal fields added in migration
+    rs_rank = Column(Float)
+    strategies_fired = Column(Text)     # JSON array e.g. '["vcp","qullamaggie"]'
+    theme_name = Column(Text)
+    theme_momentum = Column(Text)
+    theme_narrative = Column(Text)
+    fit_strength = Column(Text)
+    theme_score = Column(Float)
+    pattern_notes = Column(Text)
 
 
 class StrategyParams(Base):
