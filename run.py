@@ -5,10 +5,8 @@ Usage:
     python run.py                           # full Nordic run
     python run.py --limit 100               # test on first 100 instruments
     python run.py --dry-run                 # no DB writes, prints summary
-    python run.py --skip-ai                 # skip Claude AI assessment
     python run.py --skip-themes             # skip theme classification
     python run.py --exchange STO            # single exchange only (STO/OSL/CPH/HEL)
-    python run.py --min-score 70            # only keep signals above this score
     python run.py --from-checkpoint FILE    # skip pipeline, retry DB write from saved JSON
 """
 from __future__ import annotations
@@ -89,13 +87,11 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="AI Stock Screener pipeline")
     p.add_argument("--limit",            type=int,   default=0,    help="Max instruments (0=all)")
     p.add_argument("--dry-run",          action="store_true",      help="Skip DB writes")
-    p.add_argument("--skip-ai",          action="store_true",      help="Skip AI assessment")
     p.add_argument("--skip-themes",      action="store_true",      help="Skip theme classification")
     p.add_argument("--exchange",         default="",               help="Single exchange (STO/OSL/DE/NYSE/...)")
     p.add_argument("--region",           default="nordic",
                    choices=["nordic", "europe", "us", "all"],
                    help="Market region to run (default: nordic)")
-    p.add_argument("--min-score",        type=float, default=65.0, help="Min composite score for AI assessment")
     p.add_argument("--from-checkpoint",  default="",  metavar="FILE",
                    help="Path to pipeline_YYYY-MM-DD.json — skip pipeline, retry DB write only")
     return p.parse_args()
@@ -137,7 +133,7 @@ def _print_summary(raw_signals: list[dict], ai_results: dict) -> None:
                     str(ai.get("pattern_quality", "—")),
                     sig.get("theme_name", ""))
     logger.info("=" * 68)
-    logger.info("Total: %d signals  |  %d with AI assessment", len(raw_signals), len(ai_results))
+    logger.info("Total: %d signals", len(raw_signals))
 
 
 def _write_db(raw_signals: list[dict], ai_results: dict, meta_map: dict,
@@ -515,16 +511,9 @@ def main() -> None:
                     logger.warning("Per-strategy chart failed for %s/%s: %s", sym, strat, exc)
 
     # ------------------------------------------------------------------
-    # 8. AI batch assessment
+    # 8. AI batch assessment — removed; on-demand via dashboard button only
     # ------------------------------------------------------------------
     ai_results: dict[str, dict] = {}
-    if not args.skip_ai:
-        top = [s for s in raw_signals if s.get("composite_score", 0) >= args.min_score]
-        logger.info("AI assessment on %d signals (score ≥ %.0f)...",
-                    len(top), args.min_score)
-        from ai.agent import assess_batch
-        for r in assess_batch(top, chart_paths, min_composite_score=args.min_score):
-            ai_results[r["symbol"]] = r
 
     # ------------------------------------------------------------------
     # 8b. Checkpoint — save everything needed to retry DB write
