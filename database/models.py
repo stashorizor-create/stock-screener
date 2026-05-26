@@ -175,6 +175,40 @@ class AlertFeedback(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class ForwardTest(Base):
+    __tablename__ = "forward_tests"
+
+    id = Column(Integer, primary_key=True)
+    symbol = Column(String(20), nullable=False)
+    exchange = Column(String(10))
+    currency = Column(String(5))
+    strategy = Column(String(50))
+    composite_score = Column(Float)
+
+    entry_date = Column(Date, nullable=False)
+    entry_price = Column(Float)
+    entry_candle_low = Column(Float)   # low of entry day candle (initial stop reference)
+    stop_price = Column(Float)         # active stop — can be manually adjusted
+    pivot_price = Column(Float)
+
+    check_date = Column(Date)          # entry_date + 60 days
+    status = Column(String(20), default="pending")  # pending / completed / error
+
+    # Evaluation results
+    evaluated_at = Column(Date)
+    sl_triggered = Column(Boolean)
+    sl_trigger_date = Column(Date)
+    max_high = Column(Float)
+    min_low = Column(Float)
+    max_mfe_pct = Column(Float)        # (max_high - entry_price) / entry_price
+    max_mae_pct = Column(Float)        # (min_low - entry_price) / entry_price
+    final_price = Column(Float)
+    final_return_pct = Column(Float)
+
+    __table_args__ = (UniqueConstraint("symbol", "entry_date", "strategy",
+                                       name="uq_forward_test_symbol_date_strat"),)
+
+
 def init_db():
     """Create all tables. Safe to call multiple times."""
     Base.metadata.create_all(bind=engine)

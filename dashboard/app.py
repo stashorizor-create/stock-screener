@@ -37,7 +37,7 @@ st.set_page_config(
     page_title="AI Stock Screener",
     page_icon="📈",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="auto",
 )
 
 # Cookie manager — instantiated at module level so it persists across reruns
@@ -533,6 +533,29 @@ with st.sidebar:
     if not filtered:
         st.warning("No signals match filters.")
         st.stop()
+
+    # TradingView watchlist download
+    _TV_EXCH = {
+        "STO": "OMX", "OSL": "OSL", "CPH": "OMXCOP", "HEL": "OMXHEX",
+        "NYSE": "NYSE", "NASDAQ": "NASDAQ",
+        "LON": "LSE", "PAR": "EURONEXT", "AMS": "EURONEXT",
+        "MIL": "MIL", "MAD": "BME", "BRU": "EURONEXT", "CHE": "SIX",
+    }
+    _seen_syms: set[str] = set()
+    _tv_lines: list[str] = []
+    for _s in filtered:
+        if _s["symbol"] not in _seen_syms:
+            _tv_exch = _TV_EXCH.get(_s.get("exchange", ""), _s.get("exchange", ""))
+            _tv_lines.append(f"{_tv_exch}:{_s['symbol']}" if _tv_exch else _s["symbol"])
+            _seen_syms.add(_s["symbol"])
+    st.download_button(
+        "📥 TradingView watchlist",
+        data="\n".join(_tv_lines),
+        file_name=f"watchlist_{_run_date}.txt",
+        mime="text/plain",
+        use_container_width=True,
+        help="Import in TradingView: Watchlists → ··· → Import list",
+    )
 
     score_color_char = lambda s: ("🟢" if s >= 75 else ("🟡" if s >= 60 else "🔴"))
     labels = [

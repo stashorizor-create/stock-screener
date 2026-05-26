@@ -58,8 +58,16 @@ def detect_qullamaggie_setup(
         base_start = end_idx - base_days
         base_window = df.iloc[base_start : end_idx + 1]
 
-        base_high = base_window["close"].max()
-        base_low = base_window["close"].min()
+        # Pivot computed from the historical base only (exclude last 3 candles).
+        # Including recent candles would let a stock that broke out 2-3 days ago
+        # redefine its own "pivot" upward and trivially pass the proximity check.
+        hist_end = max(base_start + 5, end_idx - 2)
+        base_window_hist = df.iloc[base_start:hist_end]
+        if len(base_window_hist) < 5:
+            continue
+
+        base_high = base_window_hist["close"].max()
+        base_low = base_window_hist["close"].min()
 
         if base_high <= 0:
             continue
@@ -72,7 +80,7 @@ def detect_qullamaggie_setup(
         if depth > max_base_depth_pct:
             continue
 
-        # Price must be in the buy zone: ≤5% below the pivot and ≤5% above it.
+        # Price must be in the buy zone: ≤5% below the historical pivot and ≤5% above it.
         # Beyond the upper bound = breakout already happened, setup is stale.
         if current_close < base_high * (1 - pivot_proximity_pct):
             continue

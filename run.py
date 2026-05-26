@@ -79,7 +79,7 @@ REGION_EXCHANGES: dict[str, set[str]] = {
     "nordic":  NORDIC_EXCHANGES,
     "europe":  EUROPEAN_EXCHANGES,
     "us":      US_EXCHANGES,
-    "all":     set(MARKET_ID_TO_EXCHANGE.values()),
+    "all":     NORDIC_EXCHANGES | EUROPEAN_EXCHANGES | US_EXCHANGES,  # DE excluded intentionally
 }
 
 STOCK_INSTRUMENT_TYPE = 0   # Borsdata: 0 = common stock
@@ -418,6 +418,7 @@ def main() -> None:
             "date":              today.isoformat(),
             "rs_rank":           round(rs, 1),
             "entry_price":       _safe_round(entry),
+            "entry_candle_low":  _safe_round(float(df["low"].iloc[-1])),
             "stop_price":        _safe_round(stop),
             "target_price":      _safe_round(target),
             "risk_reward":       _safe_round((target - entry) / risk, 2) if (target and risk > 0) else None,
@@ -553,6 +554,13 @@ def main() -> None:
     # 10. Write to DB
     # ------------------------------------------------------------------
     _write_db(raw_signals, ai_results, meta_map, today, args.dry_run)
+
+    # ------------------------------------------------------------------
+    # 10b. Forward testing — write new entries + evaluate matured ones
+    # ------------------------------------------------------------------
+    from forward_testing.evaluator import write_forward_tests, evaluate_pending_tests
+    write_forward_tests(raw_signals, today, dry_run=args.dry_run)
+    evaluate_pending_tests(borsdata, dry_run=args.dry_run)
 
     # ------------------------------------------------------------------
     # 11. Email digest

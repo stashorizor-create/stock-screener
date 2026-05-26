@@ -5,6 +5,20 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 
+def _load_streamlit_secrets() -> None:
+    """On Streamlit Cloud .env doesn't exist; pull top-level string secrets into os.environ."""
+    try:
+        import streamlit as st
+        for key, val in st.secrets.items():
+            if isinstance(val, str) and not os.environ.get(key):
+                os.environ[key] = val
+    except Exception:
+        pass
+
+
+_load_streamlit_secrets()
+
+
 class Settings:
     # Database
     DATABASE_URL: str = os.getenv("DATABASE_URL", "")
@@ -18,7 +32,7 @@ class Settings:
 
     # Supabase REST + Storage
     SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")
-    SUPABASE_SERVICE_KEY: str = os.getenv("SUPABASE_SERVICE_KEY", "")
+    SUPABASE_SERVICE_KEY: str = os.getenv("SUPABASE_SERVICE_KEY") or os.getenv("supabase_key", "")
 
     # Finnhub (Phase 3)
     FINNHUB_API_KEY: str = os.getenv("FINNHUB_API_KEY", "")
