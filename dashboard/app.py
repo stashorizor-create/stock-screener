@@ -123,8 +123,18 @@ if not _check_password():
 st.markdown("""
 <style>
 /* Remove top padding — main and sidebar */
-.block-container { padding-top: 0 !important; margin-top: -2rem !important; }
-section[data-testid="stSidebar"] > div:first-child { padding-top: 0 !important; margin-top: -2rem !important; }
+.block-container { padding-top: 0.5rem !important; }
+section[data-testid="stSidebar"] > div:first-child { padding-top: 0.5rem !important; }
+
+/* Make sidebar toggle button visible on mobile */
+[data-testid="collapsedControl"] {
+    background-color: #238636 !important;
+    border-radius: 0 6px 6px 0 !important;
+    opacity: 1 !important;
+    width: 1.8rem !important;
+    min-height: 3rem !important;
+}
+[data-testid="collapsedControl"] svg { fill: white !important; }
 
 /* Metric strip */
 .strip {
