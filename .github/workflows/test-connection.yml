@@ -1,0 +1,70 @@
+name: Test Connections
+
+on:
+  workflow_dispatch:   # manual trigger only
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - run: pip install psycopg2-binary requests
+
+      - name: Test DB + API connectivity
+        env:
+          DATABASE_URL:         ${{ secrets.DATABASE_URL }}
+          BORSDATA_API_KEY:     ${{ secrets.BORSDATA_API_KEY }}
+          ANTHROPIC_API_KEY:    ${{ secrets.ANTHROPIC_API_KEY }}
+          SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          python - <<'EOF'
+          import os, sys, psycopg2, requests
+
+          errors = []
+
+          for key in ["DATABASE_URL", "BORSDATA_API_KEY", "ANTHROPIC_API_KEY", "SUPABASE_URL", "SUPABASE_SERVICE_KEY"]:
+              val = os.getenv(key, "").strip()
+              if not val:
+                  errors.append(f"MISSING: {key}")
+              else:
+                  print(f"  {key}: set ({len(val)} chars)")
+
+          db_url = os.getenv("DATABASE_URL", "").replace("postgres://", "postgresql://", 1)
+          if db_url:
+              try:
+                  conn = psycopg2.connect(db_url, connect_timeout=10)
+                  conn.close()
+                  print("DB connection: OK")
+              except Exception as e:
+                  errors.append(f"DB connection FAILED: {e}")
+
+          bd_key = os.getenv("BORSDATA_API_KEY", "")
+          if bd_key:
+              try:
+                  r = requests.get(
+                      "https://apiservice.borsdata.se/v1/instruments",
+                      params={"authKey": bd_key, "maxCount": 1},
+                      timeout=10
+                  )
+                  print(f"Borsdata API: {'OK' if r.status_code == 200 else f'FAILED (HTTP {r.status_code})'}")
+                  if r.status_code != 200:
+                      errors.append(f"Borsdata API HTTP {r.status_code}")
+              except Exception as e:
+                  errors.append(f"Borsdata API FAILED: {e}")
+
+          if errors:
+              print("\nFAILURES:")
+              for e in errors:
+                  print(f"  {e}", file=sys.stderr)
+              sys.exit(1)
+
+          print("\nAll checks passed — safe to run the pipeline.")
+          EOF
