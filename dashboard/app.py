@@ -351,15 +351,16 @@ def fetch_live_enrichment(symbol: str, trends_keyword: str) -> dict:
 # ---------------------------------------------------------------------------
 
 BADGE_COLORS = {
-    "vcp":          "#388bfd",
-    "qullamaggie":  "#a371f7",
-    "ema_pullback": "#e3b341",
-    "gap_up":       "#3fb950",
-    "pocket_pivot": "#f0883e",
+    "vcp":            "#388bfd",
+    "qullamaggie":    "#a371f7",
+    "ema_pullback":   "#e3b341",
+    "gap_up":         "#3fb950",
+    "pocket_pivot":   "#f0883e",
+    "sma_inside_day": "#58a6ff",
 }
 BADGE_LABELS = {
     "vcp": "VCP", "qullamaggie": "Q", "ema_pullback": "EMA5",
-    "gap_up": "BGU", "pocket_pivot": "PP",
+    "gap_up": "BGU", "pocket_pivot": "PP", "sma_inside_day": "SMA-ID",
 }
 
 
@@ -474,7 +475,7 @@ ALL_ROWS = ALL_SIGNALS
 STRAT_MAP = {
     "VCP": "vcp", "Qullamaggie": "qullamaggie",
     "5 EMA Pullback": "ema_pullback", "Buyable Gap Up": "gap_up",
-    "Pocket Pivot": "pocket_pivot",
+    "Pocket Pivot": "pocket_pivot", "SMA Inside Day": "sma_inside_day",
 }
 
 # ---------------------------------------------------------------------------
@@ -513,7 +514,7 @@ with st.sidebar:
     with _fc1:
         strat_filter = st.selectbox(
             "Strategy",
-            ["All", "VCP", "Qullamaggie", "5 EMA Pullback", "Buyable Gap Up", "Pocket Pivot"],
+            ["All", "VCP", "Qullamaggie", "5 EMA Pullback", "Buyable Gap Up", "Pocket Pivot", "SMA Inside Day"],
             label_visibility="collapsed",
         )
     with _fc2:
