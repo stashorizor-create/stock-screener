@@ -11,8 +11,9 @@ class Base(DeclarativeBase):
     pass
 
 
+_db_url = settings.DATABASE_URL.replace("postgres://", "postgresql://", 1)
 engine = create_engine(
-    settings.DATABASE_URL,
+    _db_url,
     pool_pre_ping=True,
     pool_size=5,
     max_overflow=10,
