@@ -23,6 +23,58 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Verify secrets and connectivity
+        env:
+          DATABASE_URL:         ${{ secrets.DATABASE_URL }}
+          BORSDATA_API_KEY:     ${{ secrets.BORSDATA_API_KEY }}
+          ANTHROPIC_API_KEY:    ${{ secrets.ANTHROPIC_API_KEY }}
+          SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          python - <<'EOF'
+          import os, sys, psycopg2, requests
+
+          errors = []
+
+          # Check required secrets are non-empty
+          for key in ["DATABASE_URL", "BORSDATA_API_KEY", "ANTHROPIC_API_KEY", "SUPABASE_URL", "SUPABASE_SERVICE_KEY"]:
+              if not os.getenv(key, "").strip():
+                  errors.append(f"SECRET MISSING: {key}")
+
+          # Test database connection
+          db_url = os.getenv("DATABASE_URL", "")
+          if db_url:
+              try:
+                  conn = psycopg2.connect(db_url.replace("postgresql://", "postgresql://", 1), connect_timeout=10)
+                  conn.close()
+                  print("DB connection: OK")
+              except Exception as e:
+                  errors.append(f"DB connection failed: {e}")
+
+          # Test Borsdata API key
+          bd_key = os.getenv("BORSDATA_API_KEY", "")
+          if bd_key:
+              try:
+                  r = requests.get(
+                      "https://apiservice.borsdata.se/v1/instruments",
+                      params={"authKey": bd_key, "maxCount": 1},
+                      timeout=10
+                  )
+                  if r.status_code == 200:
+                      print("Borsdata API: OK")
+                  else:
+                      errors.append(f"Borsdata API returned {r.status_code}")
+              except Exception as e:
+                  errors.append(f"Borsdata API failed: {e}")
+
+          if errors:
+              for e in errors:
+                  print(f"ERROR: {e}", file=sys.stderr)
+              sys.exit(1)
+
+          print("All checks passed.")
+          EOF
+
       - name: Run pipeline
         env:
           DATABASE_URL:        ${{ secrets.DATABASE_URL }}
