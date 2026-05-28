@@ -715,26 +715,53 @@ with st.sidebar:
 
 @st.cache_data(ttl=300, show_spinner=False)
 def get_newsletter() -> tuple[dict | None, list[dict]]:
-    """Load latest newsletter from DB. Returns (market_record, picks_list)."""
+    """Load latest newsletter from DB using psycopg2 directly (avoids SQLAlchemy init issues)."""
     try:
-        from database.models import NewsletterMarket, NewsletterPick, SessionLocal
-        with SessionLocal() as session:
-            market = (
-                session.query(NewsletterMarket)
-                .order_by(NewsletterMarket.email_date.desc())
-                .first()
-            )
-            if not market:
-                return None, []
-            picks = (
-                session.query(NewsletterPick)
-                .filter(NewsletterPick.email_date == market.email_date)
-                .order_by(NewsletterPick.source_section, NewsletterPick.ticker)
-                .all()
-            )
-            m = {c.name: getattr(market, c.name) for c in market.__table__.columns}
-            ps = [{c.name: getattr(p, c.name) for c in p.__table__.columns} for p in picks]
-            return m, ps
+        import psycopg2
+        import psycopg2.extras
+
+        db_url = ""
+        try:
+            db_url = st.secrets.get("DATABASE_URL", "")
+        except Exception:
+            pass
+        if not db_url:
+            from config.settings import settings
+            db_url = settings.DATABASE_URL
+        if not db_url:
+            return None, [{"_error": "DATABASE_URL not configured"}]
+
+        db_url = db_url.replace("postgres://", "postgresql://", 1).replace("postgresql://", "postgresql://", 1)
+        # psycopg2 needs postgres:// not postgresql://
+        pg_url = db_url.replace("postgresql://", "postgres://", 1)
+
+        conn = psycopg2.connect(pg_url, connect_timeout=10)
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        cur.execute("""
+            SELECT id, email_date, subject, market_stance, market_notes
+            FROM newsletter_market
+            ORDER BY email_date DESC LIMIT 1
+        """)
+        market_row = cur.fetchone()
+        if not market_row:
+            conn.close()
+            return None, []
+
+        market = dict(market_row)
+        email_date = market["email_date"]
+
+        cur.execute("""
+            SELECT id, email_date, ticker, action, entry_price, stop_price,
+                   target_price, position_size_pct, notes, source_section
+            FROM newsletter_picks
+            WHERE email_date = %s
+            ORDER BY source_section, ticker
+        """, (email_date,))
+        picks = [dict(r) for r in cur.fetchall()]
+
+        conn.close()
+        return market, picks
     except Exception as _e:
         return None, [{"_error": str(_e)}]
 
