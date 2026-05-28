@@ -735,14 +735,19 @@ def get_newsletter() -> tuple[dict | None, list[dict]]:
             m = {c.name: getattr(market, c.name) for c in market.__table__.columns}
             ps = [{c.name: getattr(p, c.name) for c in p.__table__.columns} for p in picks]
             return m, ps
-    except Exception:
-        return None, []
+    except Exception as _e:
+        return None, [{"_error": str(_e)}]
 
 
 def _render_newsletter_page():
     _market, _picks = get_newsletter()
 
     st.markdown("## Alex's Picks — PrimeTrading")
+
+    # Surface DB errors instead of silently showing empty state
+    if _picks and _picks[0].get("_error"):
+        st.error(f"DB error: {_picks[0]['_error']}")
+        return
 
     if _market is None:
         st.info(
