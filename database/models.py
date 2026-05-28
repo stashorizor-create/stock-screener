@@ -210,6 +210,37 @@ class ForwardTest(Base):
                                        name="uq_forward_test_symbol_date_strat"),)
 
 
+class NewsletterMarket(Base):
+    __tablename__ = "newsletter_market"
+
+    id           = Column(Integer, primary_key=True)
+    email_date   = Column(Date, nullable=False, unique=True)
+    subject      = Column(Text)
+    market_stance = Column(String(20))   # bullish/bearish/neutral/cautious
+    market_notes  = Column(Text)
+    raw_text      = Column(Text)
+    processed_at  = Column(DateTime, default=datetime.utcnow)
+
+
+class NewsletterPick(Base):
+    __tablename__ = "newsletter_picks"
+
+    id               = Column(Integer, primary_key=True)
+    email_date       = Column(Date, nullable=False)
+    ticker           = Column(String(20), nullable=False)
+    action           = Column(String(20))      # FOCUS/LONG/TRIM/OUT/WATCH/EP/STALK
+    entry_price      = Column(Float)
+    stop_price       = Column(Float)
+    target_price     = Column(Float)
+    position_size_pct = Column(Float)
+    notes            = Column(Text)
+    source_section   = Column(String(50))      # focus_list/portfolio/portfolio_table/scan_21dma/ep_list/stalklist
+    created_at       = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (UniqueConstraint("email_date", "ticker", "action", "source_section",
+                                       name="uq_newsletter_pick"),)
+
+
 def init_db():
     """Create all tables. Safe to call multiple times."""
     Base.metadata.create_all(bind=engine)

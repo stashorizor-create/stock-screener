@@ -578,6 +578,7 @@ def _call_claude_chat(
 
 ALL_SIGNALS, _data_source = get_signals()
 ALL_ROWS = ALL_SIGNALS
+sig = None  # defined in sidebar when signals exist; checked in main content
 
 STRAT_MAP = {
     "VCP": "vcp", "Qullamaggie": "qullamaggie",
@@ -593,12 +594,25 @@ with st.sidebar:
     _run_date = ALL_SIGNALS[0].get("date", "—") if ALL_SIGNALS else "—"
     _source_label = "live" if _data_source == "live" else "mock data"
     st.caption(f"Last updated: {_run_date}  ·  {_source_label}")
-    if _data_source == "mock":
-        _err = get_last_load_error()
-        st.warning(_err if _err else "Showing mock data")
-        st.info(_debug_db())
 
-    # Region selector — Nordic is primary
+    # Top-level page selector
+    _page = st.radio(
+        "page", ["📊 Screener", "📧 Alex's Picks"],
+        horizontal=True, label_visibility="collapsed",
+        key="page_selector",
+    )
+
+    if _page == "📧 Alex's Picks":
+        st.divider()
+        st.caption("PrimeTrading newsletter by Alex")
+        # Newsletter sidebar is minimal — date selector rendered in main area
+    else:
+        if _data_source == "mock":
+            _err = get_last_load_error()
+            st.warning(_err if _err else "Showing mock data")
+            st.info(_debug_db())
+
+        # Region selector — Nordic is primary
     _REGION_EXCHANGES = {
         "Nordic":  {"STO", "OSL", "CPH", "HEL"},
         "Europe":  {"PAR", "AMS", "MIL", "MAD", "BRU", "LON", "CHE"},
@@ -650,7 +664,8 @@ with st.sidebar:
 
     if not filtered:
         st.warning("No signals match filters.")
-        st.stop()
+        if _page != "📧 Alex's Picks":
+            st.stop()
 
     # TradingView watchlist download
     _TV_EXCH = {
@@ -683,19 +698,207 @@ with st.sidebar:
         for i, s in enumerate(filtered)
     ]
 
-    chosen = st.radio("Signals", labels, label_visibility="collapsed")
-    sig = filtered[labels.index(chosen)]
+    if filtered:
+        chosen = st.radio("Signals", labels, label_visibility="collapsed")
+        sig = filtered[labels.index(chosen)]
 
-    st.divider()
-    if st.button("🌡️  Market Overview", key="market_toggle", use_container_width=True):
-        st.session_state["market_open"] = not st.session_state.get("market_open", False)
-    if st.button("📒  My Trades", key="trades_toggle", use_container_width=True):
-        st.session_state["trades_open"] = not st.session_state.get("trades_open", False)
+        st.divider()
+        if st.button("🌡️  Market Overview", key="market_toggle", use_container_width=True):
+            st.session_state["market_open"] = not st.session_state.get("market_open", False)
+        if st.button("📒  My Trades", key="trades_toggle", use_container_width=True):
+            st.session_state["trades_open"] = not st.session_state.get("trades_open", False)
+
+
+# ---------------------------------------------------------------------------
+# Newsletter data loader
+# ---------------------------------------------------------------------------
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_newsletter() -> tuple[dict | None, list[dict]]:
+    """Load latest newsletter from DB. Returns (market_record, picks_list)."""
+    try:
+        from database.models import NewsletterMarket, NewsletterPick, SessionLocal
+        with SessionLocal() as session:
+            market = (
+                session.query(NewsletterMarket)
+                .order_by(NewsletterMarket.email_date.desc())
+                .first()
+            )
+            if not market:
+                return None, []
+            picks = (
+                session.query(NewsletterPick)
+                .filter(NewsletterPick.email_date == market.email_date)
+                .order_by(NewsletterPick.source_section, NewsletterPick.ticker)
+                .all()
+            )
+            m = {c.name: getattr(market, c.name) for c in market.__table__.columns}
+            ps = [{c.name: getattr(p, c.name) for c in p.__table__.columns} for p in picks]
+            return m, ps
+    except Exception:
+        return None, []
+
+
+def _render_newsletter_page():
+    _market, _picks = get_newsletter()
+
+    st.markdown("## Alex's Picks — PrimeTrading")
+
+    if _market is None:
+        st.info(
+            "No newsletter data yet.\n\n"
+            "**To populate:**\n"
+            "1. Export from Google Takeout → download zip → extract the `.mbox` file\n"
+            "2. Copy it to `data/newsletters/primetrading.mbox`\n"
+            "3. Run: `python ingest_newsletter.py`\n\n"
+            "The Takeout export is usually ready within a few hours of requesting it."
+        )
+        return
+
+    _date = _market.get("email_date", "")
+    _stance = (_market.get("market_stance") or "unknown").upper()
+    _stance_color = {
+        "BULLISH": "#3fb950", "NEUTRAL": "#e3b341",
+        "CAUTIOUS": "#e3b341", "BEARISH": "#f85149",
+    }.get(_stance, "#7d8590")
+
+    st.markdown(
+        f'<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">'
+        f'<span style="color:#8b949e;font-size:13px">{_date}</span>'
+        f'<span style="font-size:12px;font-weight:700;color:{_stance_color};'
+        f'background:{_stance_color}22;border-radius:4px;padding:3px 8px">{_stance}</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+    if _market.get("market_notes"):
+        st.markdown(
+            f'<div style="padding:10px 14px;background:#161b22;border-radius:8px;'
+            f'border:1px solid #21262d;color:#8b949e;font-size:13px;margin-bottom:16px">'
+            f'{_market["market_notes"]}</div>',
+            unsafe_allow_html=True,
+        )
+
+    # Cross-reference with screener signals
+    _signal_tickers = {s["symbol"].upper() for s in ALL_SIGNALS}
+
+    def _in_screener_badge(ticker: str) -> str:
+        if ticker.upper() in _signal_tickers:
+            return '<span style="font-size:10px;color:#3fb950;background:#3fb95022;border-radius:4px;padding:2px 6px">✓ In screener</span>'
+        return ""
+
+    def _action_badge(action: str) -> str:
+        colors = {
+            "FOCUS": "#388bfd", "LONG": "#3fb950", "ADDED": "#3fb950",
+            "NEW": "#3fb950", "TRIM": "#e3b341", "OUT": "#f85149",
+            "WATCH": "#7d8590", "EP": "#a371f7", "STALK": "#58a6ff",
+        }
+        c = colors.get(action.upper(), "#7d8590")
+        return f'<span style="font-size:10px;font-weight:700;color:{c};background:{c}22;border-radius:4px;padding:2px 6px">{action.upper()}</span>'
+
+    # Group picks by section
+    _sections: dict[str, list[dict]] = {}
+    for p in _picks:
+        _sections.setdefault(p["source_section"], []).append(p)
+
+    _SECTION_LABELS = {
+        "portfolio_table": "Portfolio (from table)",
+        "focus_list":      "Focus List",
+        "portfolio":       "Portfolio Moves",
+        "scan_21dma":      "21 DMA Scan",
+        "ep_list":         "EP List",
+        "stalklist":       "Stalk List",
+    }
+    _SECTION_ORDER = ["portfolio_table", "focus_list", "portfolio", "scan_21dma", "ep_list", "stalklist"]
+
+    for _sec_key in _SECTION_ORDER:
+        if _sec_key not in _sections:
+            continue
+        _sec_picks = _sections[_sec_key]
+        st.markdown(f"**{_SECTION_LABELS.get(_sec_key, _sec_key)}**")
+
+        if _sec_key == "portfolio_table":
+            # Rich table: entry / stop / target / size
+            rows_html = ""
+            for p in _sec_picks:
+                _e = f"${p['entry_price']:.2f}" if p.get("entry_price") else "—"
+                _s = f"${p['stop_price']:.2f}"  if p.get("stop_price")  else "—"
+                _t = f"${p['target_price']:.2f}" if p.get("target_price") else "—"
+                _sz = f"{p['position_size_pct']:.1f}%" if p.get("position_size_pct") else "—"
+                rows_html += (
+                    f'<div class="strip" style="margin-bottom:4px">'
+                    f'<div class="cell" style="flex:2;text-align:left;padding-left:10px">'
+                    f'<span style="font-weight:700;color:#e6edf3">{p["ticker"]}</span> '
+                    + _action_badge(p.get("action") or "") + " "
+                    + _in_screener_badge(p["ticker"])
+                    + f'</div>'
+                    f'<div class="cell"><span class="cell-label">ENTRY</span>'
+                    f'<div class="cell-value" style="font-size:13px">{_e}</div></div>'
+                    f'<div class="cell"><span class="cell-label">STOP</span>'
+                    f'<div class="cell-value" style="font-size:13px;color:#f85149">{_s}</div></div>'
+                    f'<div class="cell"><span class="cell-label">TARGET</span>'
+                    f'<div class="cell-value" style="font-size:13px;color:#3fb950">{_t}</div></div>'
+                    f'<div class="cell"><span class="cell-label">SIZE</span>'
+                    f'<div class="cell-value" style="font-size:13px">{_sz}</div></div>'
+                    f'</div>'
+                )
+            if rows_html:
+                st.markdown(rows_html, unsafe_allow_html=True)
+
+        elif _sec_key in ("scan_21dma", "ep_list", "stalklist"):
+            # Compact chip list
+            chips = " ".join(
+                f'<span style="display:inline-block;padding:3px 8px;margin:2px;'
+                f'background:#161b22;border:1px solid #21262d;border-radius:6px;'
+                f'font-size:13px;font-weight:700;color:#e6edf3">'
+                f'{p["ticker"]}</span>'
+                + _in_screener_badge(p["ticker"])
+                for p in _sec_picks
+            )
+            st.markdown(f'<div style="margin-bottom:12px">{chips}</div>', unsafe_allow_html=True)
+
+        else:
+            # focus_list + portfolio: rows with action badge + optional price
+            for p in _sec_picks:
+                _price_str = ""
+                if p.get("entry_price"):
+                    _price_str = f' <span style="color:#8b949e;font-size:12px">@ ${p["entry_price"]:.2f}</span>'
+                st.markdown(
+                    f'<div style="display:flex;align-items:center;gap:8px;'
+                    f'padding:6px 10px;background:#161b22;border-radius:6px;'
+                    f'border:1px solid #21262d;margin-bottom:4px">'
+                    f'<span style="font-weight:700;color:#e6edf3;min-width:60px">{p["ticker"]}</span>'
+                    + _action_badge(p.get("action") or "")
+                    + _price_str + " "
+                    + _in_screener_badge(p["ticker"])
+                    + (f'<span style="color:#7d8590;font-size:11px;margin-left:auto">{p["notes"]}</span>'
+                       if p.get("notes") else "")
+                    + "</div>",
+                    unsafe_allow_html=True,
+                )
+
+    # Date navigation — load other available dates
+    try:
+        from database.models import NewsletterMarket, SessionLocal
+        with SessionLocal() as _sess:
+            _all_dates = [
+                r[0] for r in _sess.query(NewsletterMarket.email_date)
+                .order_by(NewsletterMarket.email_date.desc()).limit(20).all()
+            ]
+        if len(_all_dates) > 1:
+            st.divider()
+            st.caption(f"{len(_all_dates)} newsletters in database · showing latest")
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
 # Main content
 # ---------------------------------------------------------------------------
+
+# Newsletter page — render and stop before screener code
+if _page == "📧 Alex's Picks":
+    _render_newsletter_page()
+    st.stop()
 
 if st.session_state.get("market_open", False):
     _sector_df = get_sector_returns()
