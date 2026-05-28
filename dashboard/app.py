@@ -466,6 +466,113 @@ def expand_to_rows(signals: list[dict]) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Claude chat helper — defined here so it's available throughout the script
+# ---------------------------------------------------------------------------
+
+def _call_claude_chat(
+    sig: dict,
+    chart_path: str | None,
+    history: list[dict],
+    user_message: str,
+) -> str:
+    """Call Claude with chart image + signal context + conversation history."""
+    import base64
+
+    try:
+        import anthropic
+    except ImportError:
+        return "anthropic package not installed."
+
+    api_key = None
+    try:
+        api_key = st.secrets.get("ANTHROPIC_API_KEY")
+    except Exception:
+        pass
+    if not api_key:
+        try:
+            from config.settings import settings
+            api_key = settings.ANTHROPIC_API_KEY
+        except Exception:
+            pass
+    if not api_key:
+        return "ANTHROPIC_API_KEY not configured — add it to Streamlit Cloud secrets."
+
+    # Build chart content block once (attached to first user message only)
+    chart_block = None
+    _is_url   = chart_path and chart_path.startswith("http")
+    _is_local = chart_path and not _is_url and Path(chart_path).exists()
+    if _is_url:
+        chart_block = {"type": "image", "source": {"type": "url", "url": chart_path}}
+    elif _is_local:
+        with open(chart_path, "rb") as _f:
+            _b64 = base64.standard_b64encode(_f.read()).decode()
+        chart_block = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": _b64}}
+
+    strats = sig.get("strategies_fired", [])
+    _sys_theme    = sig.get("theme_name") or ""
+    _sys_theme_nr = sig.get("theme_narrative") or ""
+    _sys_news     = sig.get("news_headlines") or []
+    _sys_eps      = sig.get("eps_yoy")
+    _sys_rev      = sig.get("revenue_yoy")
+    _sys_earn     = sig.get("earnings_days_out")
+
+    _theme_line = (
+        f"- Theme: {_sys_theme}" + (f" — {_sys_theme_nr}" if _sys_theme_nr else "") + "\n"
+    ) if _sys_theme else ""
+    _fund_line = (
+        f"- Fundamentals: EPS YoY {_sys_eps:+.0%}" if _sys_eps is not None else "- Fundamentals: EPS YoY n/a"
+    ) + (f", Rev YoY {_sys_rev:+.0%}" if _sys_rev is not None else ", Rev YoY n/a") + (
+        f", earnings in {_sys_earn}d" if _sys_earn else ""
+    ) + "\n"
+    _news_line = (
+        "- Recent news:\n" + "\n".join(f"  • {h}" for h in _sys_news[:5]) + "\n"
+    ) if _sys_news else ""
+
+    system = (
+        f"You are a swing trading analyst helping review {sig['symbol']} "
+        f"({sig.get('company_name', sig['symbol'])}, {sig.get('exchange', '?')}).\n"
+        f"Signal data:\n"
+        f"- Strategies: {', '.join(strats) or 'n/a'}\n"
+        f"- Composite score: {sig.get('composite_score', '?')}/100\n"
+        f"- Entry: {sig.get('entry_price', '?')}, Stop: {sig.get('stop_price', '?')}, "
+        f"Target: {sig.get('target_price', '?')}\n"
+        f"- RS Rank: {sig.get('rs_rank', '?')}th percentile\n"
+        + _theme_line + _fund_line + _news_line
+        + f"The chart image may be attached. Discuss macro context, news, and fundamentals alongside technicals. "
+        f"Be concise and actionable for a swing trader."
+    )
+
+    # Reconstruct message list — chart block attaches to the very first user message
+    messages: list[dict] = []
+    if history:
+        first = history[0]
+        first_content = (
+            [chart_block, {"type": "text", "text": first["content"]}]
+            if chart_block else first["content"]
+        )
+        messages.append({"role": "user", "content": first_content})
+        for _m in history[1:]:
+            messages.append({"role": _m["role"], "content": _m["content"]})
+        messages.append({"role": "user", "content": user_message})
+    else:
+        # First turn in this conversation — attach chart here
+        content = (
+            [chart_block, {"type": "text", "text": user_message}]
+            if chart_block else user_message
+        )
+        messages.append({"role": "user", "content": content})
+
+    client = anthropic.Anthropic(api_key=api_key)
+    resp = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=1024,
+        system=system,
+        messages=messages,
+    )
+    return resp.content[0].text
+
+
+# ---------------------------------------------------------------------------
 # Load signals
 # ---------------------------------------------------------------------------
 
@@ -1123,109 +1230,6 @@ else:
 # -------------------------------------------------------------------------
 # Signal Chatbox
 # -------------------------------------------------------------------------
-
-def _call_claude_chat(
-    sig: dict,
-    chart_path: str | None,
-    history: list[dict],
-    user_message: str,
-) -> str:
-    """Call Claude with chart image + signal context + conversation history."""
-    import base64
-
-    try:
-        import anthropic
-    except ImportError:
-        return "anthropic package not installed."
-
-    api_key = None
-    try:
-        api_key = st.secrets.get("ANTHROPIC_API_KEY")
-    except Exception:
-        pass
-    if not api_key:
-        try:
-            from config.settings import settings
-            api_key = settings.ANTHROPIC_API_KEY
-        except Exception:
-            pass
-    if not api_key:
-        return "ANTHROPIC_API_KEY not configured — add it to Streamlit Cloud secrets."
-
-    # Build chart content block once (attached to first user message only)
-    chart_block = None
-    _is_url   = chart_path and chart_path.startswith("http")
-    _is_local = chart_path and not _is_url and Path(chart_path).exists()
-    if _is_url:
-        chart_block = {"type": "image", "source": {"type": "url", "url": chart_path}}
-    elif _is_local:
-        with open(chart_path, "rb") as _f:
-            _b64 = base64.standard_b64encode(_f.read()).decode()
-        chart_block = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": _b64}}
-
-    strats = sig.get("strategies_fired", [])
-    _sys_theme    = sig.get("theme_name") or ""
-    _sys_theme_nr = sig.get("theme_narrative") or ""
-    _sys_news     = sig.get("news_headlines") or []
-    _sys_eps      = sig.get("eps_yoy")
-    _sys_rev      = sig.get("revenue_yoy")
-    _sys_earn     = sig.get("earnings_days_out")
-
-    _theme_line = (
-        f"- Theme: {_sys_theme}" + (f" — {_sys_theme_nr}" if _sys_theme_nr else "") + "\n"
-    ) if _sys_theme else ""
-    _fund_line = (
-        f"- Fundamentals: EPS YoY {_sys_eps:+.0%}" if _sys_eps is not None else "- Fundamentals: EPS YoY n/a"
-    ) + (f", Rev YoY {_sys_rev:+.0%}" if _sys_rev is not None else ", Rev YoY n/a") + (
-        f", earnings in {_sys_earn}d" if _sys_earn else ""
-    ) + "\n"
-    _news_line = (
-        "- Recent news:\n" + "\n".join(f"  • {h}" for h in _sys_news[:5]) + "\n"
-    ) if _sys_news else ""
-
-    system = (
-        f"You are a swing trading analyst helping review {sig['symbol']} "
-        f"({sig.get('company_name', sig['symbol'])}, {sig.get('exchange', '?')}).\n"
-        f"Signal data:\n"
-        f"- Strategies: {', '.join(strats) or 'n/a'}\n"
-        f"- Composite score: {sig.get('composite_score', '?')}/100\n"
-        f"- Entry: {sig.get('entry_price', '?')}, Stop: {sig.get('stop_price', '?')}, "
-        f"Target: {sig.get('target_price', '?')}\n"
-        f"- RS Rank: {sig.get('rs_rank', '?')}th percentile\n"
-        + _theme_line + _fund_line + _news_line
-        + f"The chart image may be attached. Discuss macro context, news, and fundamentals alongside technicals. "
-        f"Be concise and actionable for a swing trader."
-    )
-
-    # Reconstruct message list — chart block attaches to the very first user message
-    messages: list[dict] = []
-    if history:
-        first = history[0]
-        first_content = (
-            [chart_block, {"type": "text", "text": first["content"]}]
-            if chart_block else first["content"]
-        )
-        messages.append({"role": "user", "content": first_content})
-        for _m in history[1:]:
-            messages.append({"role": _m["role"], "content": _m["content"]})
-        messages.append({"role": "user", "content": user_message})
-    else:
-        # First turn in this conversation — attach chart here
-        content = (
-            [chart_block, {"type": "text", "text": user_message}]
-            if chart_block else user_message
-        )
-        messages.append({"role": "user", "content": content})
-
-    client = anthropic.Anthropic(api_key=api_key)
-    resp = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=1024,
-        system=system,
-        messages=messages,
-    )
-    return resp.content[0].text
-
 
 st.markdown('<div class="strip-label" style="margin-top:18px">Ask Claude about this signal</div>', unsafe_allow_html=True)
 
