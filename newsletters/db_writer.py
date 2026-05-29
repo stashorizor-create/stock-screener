@@ -8,20 +8,22 @@ logger = logging.getLogger(__name__)
 
 
 def _get_client():
-    """Get Supabase client — reads st.secrets first (Streamlit Cloud), then os.environ."""
+    """Get Supabase client — same key lookup order as _supa_client() in app.py."""
     url = key = ""
     try:
         import streamlit as st
         url = st.secrets.get("SUPABASE_URL", "")
-        key = st.secrets.get("SUPABASE_SERVICE_KEY", "") or st.secrets.get("supabase_key", "")
+        key = (st.secrets.get("SUPABASE_KEY") or
+               st.secrets.get("SUPABASE_SERVICE_KEY") or "")
     except Exception:
         pass
     if not url or not key:
         import os
-        url = url or os.environ.get("SUPABASE_URL", "")
-        key = key or os.environ.get("SUPABASE_SERVICE_KEY", "")
+        from config.settings import settings
+        url = url or settings.SUPABASE_URL
+        key = key or settings.SUPABASE_SERVICE_KEY
     if not url or not key:
-        raise RuntimeError("SUPABASE_URL or SUPABASE_SERVICE_KEY not configured")
+        raise RuntimeError("SUPABASE_URL or SUPABASE_KEY not configured in Streamlit secrets")
     from supabase import create_client
     return create_client(url, key)
 
