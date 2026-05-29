@@ -1383,7 +1383,14 @@ def _render_newsletter_page(sel_date: str | None = None):
                             rows=2, cols=1, shared_xaxes=True,
                             row_heights=[0.72, 0.28], vertical_spacing=0.02,
                         )
-                        # Cloud: low band first, then high band filled to it
+                        # Cloud: filled polygon (toself is reliable in subplots; tonexty is not)
+                        _fig.add_trace(go.Scatter(
+                            x=_dates + _dates[::-1],
+                            y=_ema_hi + _ema_lo[::-1],
+                            fill="toself", fillcolor="rgba(56,139,253,0.12)",
+                            line=dict(color="rgba(0,0,0,0)"),
+                            showlegend=False, name="EMA Cloud",
+                        ), row=1, col=1)
                         _fig.add_trace(go.Scatter(
                             x=_dates, y=_ema_lo,
                             line=dict(color="rgba(56,139,253,0.35)", width=1),
@@ -1391,7 +1398,6 @@ def _render_newsletter_page(sel_date: str | None = None):
                         ), row=1, col=1)
                         _fig.add_trace(go.Scatter(
                             x=_dates, y=_ema_hi,
-                            fill="tonexty", fillcolor="rgba(56,139,253,0.12)",
                             line=dict(color="rgba(56,139,253,0.35)", width=1),
                             showlegend=False, name="Cloud high",
                         ), row=1, col=1)
