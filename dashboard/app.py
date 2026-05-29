@@ -1516,46 +1516,73 @@ def _render_newsletter_page(sel_date: str | None = None):
             if _pt_picks and _date:
                 _tickers_with_fwd = [p["ticker"] for p in _pt_picks if p.get("entry_price")]
                 if _tickers_with_fwd:
+                    with st.spinner(f"Loading chart data for {len(_tickers_with_fwd)} positions…"):
+                        _portfolio_ohlcv = compute_watchlist_ohlcv(tuple(sorted(_tickers_with_fwd)))
                     _chart_ticker = st.selectbox(
-                        "Chart position", ["— none —"] + _tickers_with_fwd,
-                        key="nl_chart_sel", label_visibility="collapsed",
+                        "Select position to chart",
+                        _tickers_with_fwd,
+                        key="nl_chart_sel",
                     )
-                    if _chart_ticker and _chart_ticker != "— none —":
-                        _ohlcv = get_ohlcv_for_chart(_chart_ticker, _date)
+                    if _chart_ticker:
+                        _ohlcv = _portfolio_ohlcv.get(_chart_ticker, {}).get("df", [])
                         _pick_data = next((p for p in _pt_picks if p["ticker"] == _chart_ticker), {})
                         if _ohlcv:
-                            _dates   = [r["date"]  for r in _ohlcv]
-                            _closes  = [r["close"] for r in _ohlcv]
-                            _highs   = [r["high"]  for r in _ohlcv]
-                            _lows    = [r["low"]   for r in _ohlcv]
-                            _opens   = [r["open"]  for r in _ohlcv]
-                            fig = go.Figure()
-                            fig.add_trace(go.Candlestick(
+                            from plotly.subplots import make_subplots as _msp
+                            _dates  = [r["date"]   for r in _ohlcv]
+                            _opens  = [r["open"]   for r in _ohlcv]
+                            _highs  = [r["high"]   for r in _ohlcv]
+                            _lows   = [r["low"]    for r in _ohlcv]
+                            _closes = [r["close"]  for r in _ohlcv]
+                            _vols   = [r["volume"] for r in _ohlcv]
+                            import pandas as _pd2
+                            _vol_sma = _pd2.Series(_vols).rolling(20).mean().tolist()
+                            _pfig = _msp(
+                                rows=2, cols=1, shared_xaxes=True,
+                                row_heights=[0.72, 0.28], vertical_spacing=0.02,
+                            )
+                            _pfig.add_trace(go.Candlestick(
                                 x=_dates, open=_opens, high=_highs, low=_lows, close=_closes,
                                 name=_chart_ticker,
                                 increasing_line_color="#3fb950", decreasing_line_color="#f85149",
-                            ))
-                            def _hline(price, color, label, dash="dot"):
+                            ), row=1, col=1)
+                            _vol_colors = ["#3fb950" if c >= o else "#f85149"
+                                           for c, o in zip(_closes, _opens)]
+                            _pfig.add_trace(go.Bar(
+                                x=_dates, y=_vols, marker_color=_vol_colors,
+                                showlegend=False, name="Volume",
+                            ), row=2, col=1)
+                            _pfig.add_trace(go.Scatter(
+                                x=_dates, y=_vol_sma,
+                                line=dict(color="#e3b341", width=1),
+                                showlegend=False, name="Vol SMA20",
+                            ), row=2, col=1)
+                            def _hline(price, color, label):
                                 if price is None:
                                     return
-                                fig.add_hline(y=price, line_color=color, line_dash=dash, line_width=1,
-                                              annotation_text=f" {label} ${price:.2f}",
-                                              annotation_font_color=color, annotation_font_size=10)
-                            _hline(_pick_data.get("entry_price"), "#388bfd",  "Entry")
-                            _hline(_pick_data.get("stop_price"),  "#f85149",  "Stop")
+                                _pfig.add_hline(
+                                    y=price, row=1, col=1,
+                                    line_color=color, line_dash="dot", line_width=1.2,
+                                    annotation_text=f" {label} ${price:.2f}",
+                                    annotation_font_color=color, annotation_font_size=10,
+                                )
+                            _hline(_pick_data.get("entry_price"), "#388bfd", "Entry")
+                            _hline(_pick_data.get("stop_price"),  "#f85149", "Stop")
                             _hline(_pick_data.get("target_price"), "#3fb950", "T1")
                             _hline(_pick_data.get("trim_2"),       "#58a6ff", "T2")
                             _hline(_pick_data.get("trim_3"),       "#a371f7", "T3")
-                            fig.update_layout(
-                                height=340, margin=dict(l=0, r=0, t=20, b=0),
+                            _pfig.update_layout(
+                                height=420, margin=dict(l=0, r=0, t=20, b=0),
                                 paper_bgcolor="#0d1117", plot_bgcolor="#0d1117",
                                 xaxis=dict(showgrid=False, color="#7d8590", rangeslider_visible=False),
                                 yaxis=dict(showgrid=True, gridcolor="#21262d", color="#7d8590"),
+                                xaxis2=dict(showgrid=False, color="#7d8590"),
+                                yaxis2=dict(showgrid=True, gridcolor="#21262d", color="#7d8590"),
                                 showlegend=False,
                             )
-                            st.plotly_chart(fig, use_container_width=True)
+                            st.plotly_chart(_pfig, use_container_width=True)
                         else:
-                            st.caption(f"No OHLCV data for {_chart_ticker} from {_date} — run the pipeline to populate.")
+                            _err = _portfolio_ohlcv.get(_chart_ticker, {}).get("error", "unknown")
+                            st.caption(f"No chart data for {_chart_ticker} — {_err}")
 
             st.markdown("")
 
