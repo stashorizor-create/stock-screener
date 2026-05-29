@@ -84,6 +84,26 @@ def write_newsletter(
             picks.append({"email_date": str(email_date), "ticker": ticker,
                           "action": "STALK", "source_section": "stalklist"})
 
+    # Portfolio table from text extraction (used when vision finds nothing)
+    # Vision trades take precedence — collected below will overwrite via upsert
+    _vision_tickers = {_clean_ticker(t.get("ticker")) for t in vision_trades if t.get("entry")}
+    for trade in extracted.get("portfolio_table") or []:
+        ticker = _clean_ticker(trade.get("ticker"))
+        if ticker and trade.get("entry") is not None and ticker not in _vision_tickers:
+            picks.append({
+                "email_date":        str(email_date),
+                "ticker":            ticker,
+                "action":            (trade.get("action") or "LONG").upper(),
+                "entry_price":       _f(trade.get("entry")),
+                "stop_price":        _f(trade.get("stop")),
+                "target_price":      _f(trade.get("trim_1")),
+                "trim_2":            _f(trade.get("trim_2")),
+                "trim_3":            _f(trade.get("trim_3")),
+                "position_size_pct": _f(trade.get("size_pct")),
+                "notes":             trade.get("notes"),
+                "source_section":    "portfolio_table",
+            })
+
     for trade in vision_trades:
         ticker = _clean_ticker(trade.get("ticker"))
         if ticker and trade.get("entry") is not None:

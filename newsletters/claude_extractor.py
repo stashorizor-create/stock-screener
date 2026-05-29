@@ -18,6 +18,19 @@ Schema:
 {
   "market_stance": "bullish|bearish|neutral|cautious",
   "market_notes": "1-2 sentence summary of market commentary",
+  "portfolio_table": [
+    {
+      "ticker": "NVDA",
+      "action": "LONG",
+      "entry": 211.66,
+      "stop": 195.0,
+      "size_pct": 8.5,
+      "trim_1": 240.0,
+      "trim_2": 270.0,
+      "trim_3": null,
+      "notes": null
+    }
+  ],
   "focus_list": [
     {"ticker": "NVDA", "price_level": 950.0, "notes": "optional note"}
   ],
@@ -31,9 +44,11 @@ Schema:
 
 Rules:
 - Strip $ prefix from tickers (e.g. $NVDA → NVDA)
-- price_level: actual stock price in parentheses (e.g. "$LITE (22)" → 22.0). \
-  If the number is clearly a conviction/rating score (typically 70-100 on a 0-100 scale, \
-  labelled as score/rating/rank), set price_level to null and put it in notes instead.
+- portfolio_table: the current open positions table (entry price, stop, size %, trim targets).
+  Include every row you can find. Use null for any field not visible in the text.
+  Only include rows that have at least an entry price. Return [] if no portfolio table found.
+- price_level in focus_list: actual stock price in parentheses (e.g. "$LITE (22)" → 22.0).
+  If the number is clearly a conviction/rating score (70-100 scale), set to null and put in notes.
 - Use null for any section not present in the newsletter
 - If a ticker appears in multiple sections, include it in all relevant sections
 
