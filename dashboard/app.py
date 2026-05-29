@@ -14,14 +14,17 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
-# Streamlit Cloud persists the /mount/src volume between deploys, leaving stale
-# .pyc files in __pycache__/ that Python uses instead of recompiling new source.
-# Delete the newsletters package cache on every startup to force fresh compilation.
+# Streamlit hot-reload reruns app.py but keeps sys.modules cached, so stale
+# newsletter module bytecode survives deploys. Clear both the __pycache__ dirs
+# and any loaded newsletters.* modules on every run to guarantee fresh imports.
 import shutil as _shutil
 for _pkg in ["newsletters", "config", "data"]:
     _cache = ROOT / _pkg / "__pycache__"
     if _cache.exists():
         _shutil.rmtree(_cache, ignore_errors=True)
+for _mod_name in list(sys.modules.keys()):
+    if _mod_name.startswith("newsletters"):
+        del sys.modules[_mod_name]
 
 import hashlib
 from datetime import datetime, timedelta, timezone
