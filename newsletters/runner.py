@@ -8,9 +8,18 @@ logger = logging.getLogger(__name__)
 
 
 def _make_client():
-    from config.settings import settings
+    """Build Anthropic client. Reads st.secrets first (Streamlit Cloud), then settings."""
+    api_key = ""
+    try:
+        import streamlit as st
+        api_key = st.secrets.get("ANTHROPIC_API_KEY", "")
+    except Exception:
+        pass
+    if not api_key:
+        from config.settings import settings
+        api_key = settings.ANTHROPIC_API_KEY
     import anthropic
-    return anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+    return anthropic.Anthropic(api_key=api_key)
 
 
 def _process_one(email_dt, subject, html_body, text_body, client,

@@ -8,16 +8,20 @@ logger = logging.getLogger(__name__)
 
 
 def _get_conn():
-    """Return a psycopg2 connection, reading DATABASE_URL at call time."""
-    import os
-    from config.settings import _load_streamlit_secrets
-    _load_streamlit_secrets()
-    url = os.environ.get("DATABASE_URL", "")
+    """Return a psycopg2 connection. Reads st.secrets first (Streamlit Cloud), then os.environ."""
+    url = ""
+    try:
+        import streamlit as st
+        url = st.secrets.get("DATABASE_URL", "")
+    except Exception:
+        pass
     if not url:
-        raise RuntimeError("DATABASE_URL is not set")
-    url = url.replace("postgresql://", "postgres://", 1)  # psycopg2 uses postgres://
+        import os
+        url = os.environ.get("DATABASE_URL", "")
+    if not url:
+        raise RuntimeError("DATABASE_URL is not set — add it to Streamlit Cloud secrets or .env")
     import psycopg2
-    return psycopg2.connect(url)
+    return psycopg2.connect(url)  # psycopg2 accepts both postgres:// and postgresql://
 
 
 def write_newsletter(
