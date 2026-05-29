@@ -786,6 +786,27 @@ def get_watchlist_tickers(email_date: str) -> list[dict]:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
+def get_pick_entry_date(ticker: str) -> str | None:
+    """Return the earliest newsletter date this ticker appeared in portfolio_table with an entry price."""
+    client, err = _supa_client()
+    if err or client is None:
+        return None
+    try:
+        r = (client.table("newsletter_picks")
+             .select("email_date")
+             .eq("ticker", ticker)
+             .eq("source_section", "portfolio_table")
+             .not_.is_("entry_price", "null")
+             .order("email_date")
+             .limit(1)
+             .execute())
+        rows = r.data or []
+        return str(rows[0]["email_date"]) if rows else None
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
 def compute_watchlist_ohlcv(tickers: tuple[str, ...]) -> dict[str, dict]:
     """
     Fetch OHLCV via Borsdata API for each ticker and compute EMA21 cloud scores.
@@ -1570,6 +1591,16 @@ def _render_newsletter_page(sel_date: str | None = None):
                             _hline(_pick_data.get("target_price"), "#3fb950", "T1")
                             _hline(_pick_data.get("trim_2"),       "#58a6ff", "T2")
                             _hline(_pick_data.get("trim_3"),       "#a371f7", "T3")
+                            # Entry date vertical line
+                            _entry_dt = get_pick_entry_date(_chart_ticker)
+                            if _entry_dt and _entry_dt in _dates:
+                                _pfig.add_vline(
+                                    x=_entry_dt,
+                                    line_color="#388bfd", line_dash="dash", line_width=1.5,
+                                    annotation_text=" Entry date",
+                                    annotation_font_color="#388bfd", annotation_font_size=10,
+                                    row=1, col=1,
+                                )
                             _pfig.update_layout(
                                 height=420, margin=dict(l=0, r=0, t=20, b=0),
                                 paper_bgcolor="#0d1117", plot_bgcolor="#0d1117",
