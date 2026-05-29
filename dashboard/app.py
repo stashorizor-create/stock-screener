@@ -1108,7 +1108,9 @@ def _render_newsletter_page(sel_date: str | None = None):
                         else:
                             st.error(f"Ingestion failed: {_msg}")
                     except Exception as _exc:
+                        import traceback
                         st.error(f"Error: {_exc}")
+                        st.code(traceback.format_exc(), language="text")
 
     _market, _picks = get_newsletter(sel_date)
 
