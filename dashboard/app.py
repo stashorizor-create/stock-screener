@@ -1613,15 +1613,20 @@ def _render_newsletter_page(sel_date: str | None = None):
                             _hline(_pick_data.get("target_price"), "#3fb950", "T1")
                             _hline(_pick_data.get("trim_2"),       "#58a6ff", "T2")
                             _hline(_pick_data.get("trim_3"),       "#a371f7", "T3")
-                            # Entry date vertical line
+                            # Entry date vertical line (add_vline doesn't support row/col)
                             _entry_dt = get_pick_entry_date(_chart_ticker)
                             if _entry_dt and _entry_dt in _dates:
-                                _pfig.add_vline(
-                                    x=_entry_dt,
-                                    line_color="#388bfd", line_dash="dash", line_width=1.5,
-                                    annotation_text=" Entry date",
-                                    annotation_font_color="#388bfd", annotation_font_size=10,
-                                    row=1, col=1,
+                                _pfig.add_shape(
+                                    type="line",
+                                    x0=_entry_dt, x1=_entry_dt, y0=0, y1=1,
+                                    xref="x", yref="paper",
+                                    line=dict(color="#388bfd", dash="dash", width=1.5),
+                                )
+                                _pfig.add_annotation(
+                                    x=_entry_dt, y=0.98, xref="x", yref="paper",
+                                    text="Entry date", showarrow=False,
+                                    font=dict(color="#388bfd", size=10),
+                                    xanchor="left",
                                 )
                             _pfig.update_layout(
                                 height=420, margin=dict(l=0, r=0, t=20, b=0),
