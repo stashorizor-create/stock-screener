@@ -101,6 +101,43 @@ def run_eml_bytes(data: bytes, dry_run: bool = False) -> tuple[bool, str]:
     return False, "Email had no readable content."
 
 
+def run_portfolio_image(
+    image_data: bytes,
+    media_type: str,
+    email_date,
+    dry_run: bool = False,
+) -> tuple[bool, str]:
+    """
+    Run vision extraction on a single screenshot and upsert portfolio_table picks
+    for the given newsletter date. Used when Substack image URLs have expired.
+    Returns (success, message).
+    """
+    import base64
+    from datetime import date as _date, datetime as _datetime
+    from newsletters.claude_extractor import extract_from_images
+    from newsletters.db_writer import write_newsletter
+
+    if isinstance(email_date, str):
+        email_date = _datetime.strptime(email_date[:10], "%Y-%m-%d").date()
+
+    client = _make_client()
+    b64 = base64.b64encode(image_data).decode()
+    trades = extract_from_images([(b64, media_type)], client)
+    if not trades:
+        return False, "No portfolio table found in this image — make sure it shows tickers, entry prices and stops."
+
+    write_newsletter(
+        email_date=email_date,
+        subject="",
+        extracted={},
+        vision_trades=trades,
+        raw_text="",
+        dry_run=dry_run,
+    )
+    tickers = ", ".join(t.get("ticker", "?") for t in trades if t.get("ticker"))
+    return True, f"Extracted {len(trades)} position(s): {tickers}"
+
+
 def run(
     mbox_path: str | Path,
     dry_run: bool = False,

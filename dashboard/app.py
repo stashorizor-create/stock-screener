@@ -1139,6 +1139,42 @@ def _render_newsletter_page(sel_date: str | None = None):
                         st.error(f"Error: {_exc}")
                         st.code(traceback.format_exc(), language="text")
 
+    # ── Portfolio screenshot upload ─────────────────────────────────────────────
+    _mkt_for_upload, _ = get_newsletter(sel_date)
+    _upload_date = (_mkt_for_upload or {}).get("email_date")
+    if _upload_date:
+        with st.expander("📊 Upload portfolio table screenshot", expanded=False):
+            st.caption(
+                f"Substack image URLs expire — if the Portfolio tab shows no data, "
+                f"screenshot the positions table from Gmail and drop it here. "
+                f"Will be saved to newsletter **{_upload_date}**."
+            )
+            _img_upload = st.file_uploader(
+                "Portfolio screenshot", type=["png", "jpg", "jpeg", "webp"],
+                key="portfolio_img_uploader", label_visibility="collapsed",
+            )
+            if _img_upload is not None:
+                _img_id = f"{_img_upload.name}_{_img_upload.size}"
+                if st.session_state.get("_last_portfolio_img") != _img_id:
+                    with st.spinner("Extracting portfolio table from image… (~5 sec)"):
+                        try:
+                            from newsletters.runner import run_portfolio_image
+                            _mt = _img_upload.type or "image/png"
+                            _ok2, _msg2 = run_portfolio_image(
+                                _img_upload.read(), _mt, _upload_date
+                            )
+                            if _ok2:
+                                st.success(f"Done — {_msg2}")
+                                st.session_state["_last_portfolio_img"] = _img_id
+                                st.cache_data.clear()
+                                st.rerun()
+                            else:
+                                st.error(f"Extraction failed: {_msg2}")
+                        except Exception as _exc2:
+                            import traceback
+                            st.error(f"Error: {_exc2}")
+                            st.code(traceback.format_exc(), language="text")
+
     _market, _picks = get_newsletter(sel_date)
 
     if _picks and _picks[0].get("_error"):
