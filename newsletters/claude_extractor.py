@@ -44,14 +44,24 @@ _VISION_PROMPT = """\
 This image is from a swing trading newsletter and may contain a portfolio positions table.
 
 If the image contains a table with rows of stock positions (each row has a ticker symbol \
-and at least one price or metric), extract every row from that table.
+and numeric price/metric columns), extract every row.
 
-For each row read: ticker symbol, direction (LONG or SHORT), and entry price if visible.
-Only include values you can actually read — use null for anything not visible.
+For each row read these fields:
+- ticker: the stock symbol (e.g. NVDA, TSLA)
+- action: LONG or SHORT (default LONG if column not present)
+- entry: entry price as an absolute dollar number
+- stop: stop loss as an absolute dollar price (not a percentage, not a distance)
+- size_pct: position size as a percentage of portfolio equity (e.g. 8.5 means 8.5%)
+- trim_1: first partial exit target price (absolute dollar amount)
+- trim_2: second partial exit target price
+- trim_3: third partial exit target price
+- notes: any brief note visible in the row
+
+Only include values you can actually read — use null for anything not visible or unclear.
 Return [] for pure chart images (candlestick charts, breadth indicators) with no position rows.
 
 Return ONLY valid JSON, no markdown:
-[{"ticker": "NVDA", "action": "LONG", "entry": 950.0, "stop": null, "target": null, "size_pct": null, "notes": null}]
+[{"ticker": "NVDA", "action": "LONG", "entry": 211.66, "stop": 195.0, "size_pct": 8.5, "trim_1": 240.0, "trim_2": 270.0, "trim_3": null, "notes": null}]
 """
 
 

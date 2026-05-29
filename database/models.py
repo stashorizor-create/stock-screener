@@ -231,7 +231,9 @@ class NewsletterPick(Base):
     action           = Column(String(20))      # FOCUS/LONG/TRIM/OUT/WATCH/EP/STALK
     entry_price      = Column(Float)
     stop_price       = Column(Float)
-    target_price     = Column(Float)
+    target_price     = Column(Float)           # trim_1 (first partial target)
+    trim_2           = Column(Float)
+    trim_3           = Column(Float)
     position_size_pct = Column(Float)
     notes            = Column(Text)
     source_section   = Column(String(50))      # focus_list/portfolio/portfolio_table/scan_21dma/ep_list/stalklist
@@ -239,6 +241,35 @@ class NewsletterPick(Base):
 
     __table_args__ = (UniqueConstraint("email_date", "ticker", "action", "source_section",
                                        name="uq_newsletter_pick"),)
+
+
+class NewsletterForwardTest(Base):
+    __tablename__ = "newsletter_forward_tests"
+
+    id               = Column(Integer, primary_key=True)
+    pick_id          = Column(Integer, ForeignKey("newsletter_picks.id"), unique=True, nullable=False)
+    email_date       = Column(Date, nullable=False)
+    ticker           = Column(String(20), nullable=False)
+    action           = Column(String(20))
+    entry_price      = Column(Float)
+    stop_price       = Column(Float)
+    trim_1           = Column(Float)
+    trim_2           = Column(Float)
+    trim_3           = Column(Float)
+    size_pct         = Column(Float)
+
+    evaluated_at     = Column(Date)
+    days_held        = Column(Integer)
+    current_price    = Column(Float)
+    current_return_pct = Column(Float)
+    max_high         = Column(Float)
+    max_mfe_pct      = Column(Float)
+    min_low          = Column(Float)
+    max_mae_pct      = Column(Float)
+    stop_hit         = Column(Boolean)
+    stop_hit_date    = Column(Date)
+    r_multiple       = Column(Float)
+    status           = Column(String(20), default="active")
 
 
 def init_db():

@@ -586,6 +586,129 @@ STRAT_MAP = {
     "Pocket Pivot": "pocket_pivot", "SMA Inside Day": "sma_inside_day",
 }
 
+_selected_newsletter_date: str | None = None
+
+# ---------------------------------------------------------------------------
+# Newsletter data loaders (defined before sidebar so sidebar can call them)
+# ---------------------------------------------------------------------------
+
+def _supa_client():
+    """Return (client, err_str | None)."""
+    try:
+        from supabase import create_client
+        supa_url = ""
+        supa_key = ""
+        try:
+            supa_url = st.secrets.get("SUPABASE_URL", "")
+            supa_key = (st.secrets.get("SUPABASE_KEY") or
+                        st.secrets.get("SUPABASE_SERVICE_KEY") or "")
+        except Exception:
+            pass
+        if not supa_url or not supa_key:
+            from config.settings import settings
+            supa_url = supa_url or settings.SUPABASE_URL
+            supa_key = supa_key or settings.SUPABASE_SERVICE_KEY
+        if not supa_url or not supa_key:
+            return None, "SUPABASE_URL / SUPABASE_KEY not configured"
+        return create_client(supa_url, supa_key), None
+    except Exception as _e:
+        return None, str(_e)
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def get_newsletter_dates() -> list[str]:
+    """Return list of newsletter dates (ISO strings), newest first."""
+    client, err = _supa_client()
+    if err or client is None:
+        return []
+    try:
+        r = (client.table("newsletter_market")
+             .select("email_date")
+             .order("email_date", desc=True)
+             .limit(60)
+             .execute())
+        return [row["email_date"] for row in (r.data or [])]
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_newsletter(date: str | None = None) -> tuple[dict | None, list[dict]]:
+    """Load newsletter for a specific date (or latest if None)."""
+    try:
+        client, err = _supa_client()
+        if err or client is None:
+            return None, [{"_error": err or "Supabase unavailable"}]
+
+        if date:
+            r = (client.table("newsletter_market")
+                 .select("id,email_date,subject,market_stance,market_notes")
+                 .eq("email_date", date)
+                 .limit(1)
+                 .execute())
+        else:
+            r = (client.table("newsletter_market")
+                 .select("id,email_date,subject,market_stance,market_notes")
+                 .order("email_date", desc=True)
+                 .limit(1)
+                 .execute())
+        if not r.data:
+            return None, []
+
+        market = r.data[0]
+        email_date = market["email_date"]
+
+        r2 = (client.table("newsletter_picks")
+              .select("id,email_date,ticker,action,entry_price,stop_price,"
+                      "target_price,trim_2,trim_3,position_size_pct,notes,source_section")
+              .eq("email_date", email_date)
+              .order("source_section")
+              .order("ticker")
+              .execute())
+        picks = r2.data or []
+        return market, picks
+    except Exception as _e:
+        return None, [{"_error": str(_e)}]
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_forward_tests(email_date: str) -> list[dict]:
+    """Load forward test metrics for a newsletter date."""
+    client, err = _supa_client()
+    if err or client is None:
+        return []
+    try:
+        r = (client.table("newsletter_forward_tests")
+             .select("ticker,action,entry_price,stop_price,trim_1,trim_2,trim_3,"
+                     "current_price,current_return_pct,r_multiple,"
+                     "stop_hit,stop_hit_date,max_mfe_pct,days_held,status")
+             .eq("email_date", email_date)
+             .order("ticker")
+             .execute())
+        return r.data or []
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_ohlcv_for_chart(ticker: str, from_date: str) -> list[dict]:
+    """Load OHLCV rows for a ticker from from_date onwards (for charting)."""
+    client, err = _supa_client()
+    if err or client is None:
+        return []
+    try:
+        r = (client.table("ohlcv")
+             .select("date,open,high,low,close")
+             .eq("symbol", ticker)
+             .gte("date", from_date)
+             .order("date")
+             .limit(300)
+             .execute())
+        return r.data or []
+    except Exception:
+        return []
+
+
 # ---------------------------------------------------------------------------
 # Sidebar — filters + ranked list
 # ---------------------------------------------------------------------------
@@ -605,7 +728,14 @@ with st.sidebar:
     if _page == "📧 Alex's Picks":
         st.divider()
         st.caption("PrimeTrading newsletter by Alex")
-        # Newsletter sidebar is minimal — date selector rendered in main area
+        _nl_dates = get_newsletter_dates()
+        if len(_nl_dates) > 1:
+            _selected_newsletter_date = st.selectbox(
+                "Edition", _nl_dates, index=0, format_func=str, key="nl_date_sel",
+                label_visibility="collapsed",
+            )
+        elif _nl_dates:
+            _selected_newsletter_date = _nl_dates[0]
     else:
         if _data_source == "mock":
             _err = get_last_load_error()
@@ -709,63 +839,11 @@ with st.sidebar:
             st.session_state["trades_open"] = not st.session_state.get("trades_open", False)
 
 
-# ---------------------------------------------------------------------------
-# Newsletter data loader
-# ---------------------------------------------------------------------------
-
-@st.cache_data(ttl=300, show_spinner=False)
-def get_newsletter() -> tuple[dict | None, list[dict]]:
-    """Load latest newsletter via Supabase REST API (same path as signal loader)."""
-    try:
-        supa_url = ""
-        supa_key = ""
-        try:
-            supa_url = st.secrets.get("SUPABASE_URL", "")
-            supa_key = (st.secrets.get("SUPABASE_KEY") or
-                        st.secrets.get("SUPABASE_SERVICE_KEY") or "")
-        except Exception:
-            pass
-        if not supa_url or not supa_key:
-            from config.settings import settings
-            supa_url = supa_url or settings.SUPABASE_URL
-            supa_key = supa_key or settings.SUPABASE_SERVICE_KEY
-
-        if not supa_url or not supa_key:
-            return None, [{"_error": "SUPABASE_URL / SUPABASE_KEY not configured in Streamlit secrets"}]
-
-        from supabase import create_client
-        client = create_client(supa_url, supa_key)
-
-        r = (client.table("newsletter_market")
-             .select("id,email_date,subject,market_stance,market_notes")
-             .order("email_date", desc=True)
-             .limit(1)
-             .execute())
-        if not r.data:
-            return None, []
-
-        market = r.data[0]
-        email_date = market["email_date"]
-
-        r2 = (client.table("newsletter_picks")
-              .select("id,email_date,ticker,action,entry_price,stop_price,"
-                      "target_price,position_size_pct,notes,source_section")
-              .eq("email_date", email_date)
-              .order("source_section")
-              .order("ticker")
-              .execute())
-        picks = r2.data or []
-        return market, picks
-    except Exception as _e:
-        return None, [{"_error": str(_e)}]
-
-
-def _render_newsletter_page():
-    _market, _picks = get_newsletter()
+def _render_newsletter_page(sel_date: str | None = None):
+    _market, _picks = get_newsletter(sel_date)
 
     st.markdown("## Alex's Picks — PrimeTrading")
 
-    # Surface DB errors instead of silently showing empty state
     if _picks and _picks[0].get("_error"):
         st.error(f"DB error: {_picks[0]['_error']}")
         return
@@ -804,12 +882,11 @@ def _render_newsletter_page():
             unsafe_allow_html=True,
         )
 
-    # Cross-reference with screener signals
     _signal_tickers = {s["symbol"].upper() for s in ALL_SIGNALS}
 
     def _in_screener_badge(ticker: str) -> str:
         if ticker.upper() in _signal_tickers:
-            return '<span style="font-size:10px;color:#3fb950;background:#3fb95022;border-radius:4px;padding:2px 6px">✓ In screener</span>'
+            return '<span style="font-size:10px;color:#3fb950;background:#3fb95022;border-radius:4px;padding:2px 6px">✓ screener</span>'
         return ""
 
     def _action_badge(action: str) -> str:
@@ -818,16 +895,15 @@ def _render_newsletter_page():
             "NEW": "#3fb950", "TRIM": "#e3b341", "OUT": "#f85149",
             "WATCH": "#7d8590", "EP": "#a371f7", "STALK": "#58a6ff",
         }
-        c = colors.get(action.upper(), "#7d8590")
-        return f'<span style="font-size:10px;font-weight:700;color:{c};background:{c}22;border-radius:4px;padding:2px 6px">{action.upper()}</span>'
+        c = colors.get((action or "").upper(), "#7d8590")
+        return f'<span style="font-size:10px;font-weight:700;color:{c};background:{c}22;border-radius:4px;padding:2px 6px">{(action or "").upper()}</span>'
 
-    # Group picks by section
     _sections: dict[str, list[dict]] = {}
     for p in _picks:
         _sections.setdefault(p["source_section"], []).append(p)
 
     _SECTION_LABELS = {
-        "portfolio_table": "Portfolio (from table)",
+        "portfolio_table": "Portfolio",
         "focus_list":      "Focus List",
         "portfolio":       "Portfolio Moves",
         "scan_21dma":      "21 DMA Scan",
@@ -836,42 +912,129 @@ def _render_newsletter_page():
     }
     _SECTION_ORDER = ["portfolio_table", "focus_list", "portfolio", "scan_21dma", "ep_list", "stalklist"]
 
-    for _sec_key in _SECTION_ORDER:
+    # --- Portfolio table section (with forward-test performance) ---
+    if "portfolio_table" in _sections:
+        _pt_picks = _sections["portfolio_table"]
+        _fwd = {r["ticker"]: r for r in get_forward_tests(_date)} if _date else {}
+
+        st.markdown("**Portfolio**")
+
+        # Column headers
+        _hdr = (
+            '<div style="display:flex;gap:4px;padding:0 6px;margin-bottom:2px">'
+            '<div style="flex:2;font-size:10px;color:#7d8590;text-transform:uppercase">Ticker</div>'
+            '<div style="flex:1;text-align:right;font-size:10px;color:#7d8590;text-transform:uppercase">Entry</div>'
+            '<div style="flex:1;text-align:right;font-size:10px;color:#7d8590;text-transform:uppercase">Stop</div>'
+            '<div style="flex:1;text-align:right;font-size:10px;color:#7d8590;text-transform:uppercase">Size</div>'
+            '<div style="flex:1;text-align:right;font-size:10px;color:#7d8590;text-transform:uppercase">T1</div>'
+            '<div style="flex:1;text-align:right;font-size:10px;color:#7d8590;text-transform:uppercase">T2</div>'
+            '<div style="flex:1;text-align:right;font-size:10px;color:#7d8590;text-transform:uppercase">T3</div>'
+            '<div style="flex:1;text-align:right;font-size:10px;color:#7d8590;text-transform:uppercase">Perf</div>'
+            '</div>'
+        )
+        st.markdown(_hdr, unsafe_allow_html=True)
+
+        rows_html = ""
+        for p in _pt_picks:
+            tk = p["ticker"]
+            _e  = f"${p['entry_price']:.2f}"       if p.get("entry_price")       else "—"
+            _s  = f"${p['stop_price']:.2f}"         if p.get("stop_price")         else "—"
+            _sz = f"{p['position_size_pct']:.1f}%"  if p.get("position_size_pct") else "—"
+            _t1 = f"${p['target_price']:.0f}"       if p.get("target_price")       else "—"
+            _t2 = f"${p['trim_2']:.0f}"              if p.get("trim_2")              else "—"
+            _t3 = f"${p['trim_3']:.0f}"              if p.get("trim_3")              else "—"
+
+            fwd = _fwd.get(tk, {})
+            _ret = fwd.get("current_return_pct")
+            if _ret is not None:
+                _ret_color = "#3fb950" if _ret >= 0 else "#f85149"
+                _stopped = fwd.get("stop_hit") or fwd.get("status") == "stopped"
+                _perf = (f'<span style="color:{_ret_color};font-size:12px;font-weight:700">'
+                         f'{"⛔ " if _stopped else ""}{_ret:+.1f}%</span>')
+                _r = fwd.get("r_multiple")
+                if _r is not None:
+                    _r_color = "#3fb950" if _r >= 0 else "#f85149"
+                    _perf += f'<span style="color:{_r_color};font-size:10px;margin-left:4px">{_r:+.1f}R</span>'
+            else:
+                _perf = '<span style="color:#7d8590;font-size:11px">—</span>'
+
+            rows_html += (
+                f'<div style="display:flex;gap:4px;align-items:center;'
+                f'padding:5px 6px;background:#0d1117;border-radius:6px;'
+                f'border:1px solid #21262d;margin-bottom:3px">'
+                f'<div style="flex:2;display:flex;align-items:center;gap:5px">'
+                f'<span style="font-weight:700;color:#e6edf3;font-size:13px">{tk}</span>'
+                + _action_badge(p.get("action") or "") + " "
+                + _in_screener_badge(tk)
+                + f'</div>'
+                f'<div style="flex:1;text-align:right;font-size:12px;color:#e6edf3">{_e}</div>'
+                f'<div style="flex:1;text-align:right;font-size:12px;color:#f85149">{_s}</div>'
+                f'<div style="flex:1;text-align:right;font-size:12px;color:#8b949e">{_sz}</div>'
+                f'<div style="flex:1;text-align:right;font-size:12px;color:#3fb950">{_t1}</div>'
+                f'<div style="flex:1;text-align:right;font-size:12px;color:#3fb950">{_t2}</div>'
+                f'<div style="flex:1;text-align:right;font-size:12px;color:#3fb950">{_t3}</div>'
+                f'<div style="flex:1;text-align:right">{_perf}</div>'
+                f'</div>'
+            )
+        if rows_html:
+            st.markdown(rows_html, unsafe_allow_html=True)
+
+        # --- Chart for selected position ---
+        if _pt_picks and _date:
+            _tickers_with_fwd = [p["ticker"] for p in _pt_picks if p.get("entry_price")]
+            if _tickers_with_fwd:
+                _chart_ticker = st.selectbox(
+                    "Chart position", ["— none —"] + _tickers_with_fwd,
+                    key="nl_chart_sel", label_visibility="collapsed",
+                )
+                if _chart_ticker and _chart_ticker != "— none —":
+                    _ohlcv = get_ohlcv_for_chart(_chart_ticker, _date)
+                    _pick_data = next((p for p in _pt_picks if p["ticker"] == _chart_ticker), {})
+                    if _ohlcv:
+                        import plotly.graph_objects as go
+                        _dates   = [r["date"]  for r in _ohlcv]
+                        _closes  = [r["close"] for r in _ohlcv]
+                        _highs   = [r["high"]  for r in _ohlcv]
+                        _lows    = [r["low"]   for r in _ohlcv]
+                        _opens   = [r["open"]  for r in _ohlcv]
+                        fig = go.Figure()
+                        fig.add_trace(go.Candlestick(
+                            x=_dates, open=_opens, high=_highs, low=_lows, close=_closes,
+                            name=_chart_ticker,
+                            increasing_line_color="#3fb950", decreasing_line_color="#f85149",
+                        ))
+                        def _hline(price, color, label, dash="dot"):
+                            if price is None:
+                                return
+                            fig.add_hline(y=price, line_color=color, line_dash=dash, line_width=1,
+                                          annotation_text=f" {label} ${price:.2f}",
+                                          annotation_font_color=color, annotation_font_size=10)
+                        _hline(_pick_data.get("entry_price"), "#388bfd",  "Entry")
+                        _hline(_pick_data.get("stop_price"),  "#f85149",  "Stop")
+                        _hline(_pick_data.get("target_price"), "#3fb950", "T1")
+                        _hline(_pick_data.get("trim_2"),       "#58a6ff", "T2")
+                        _hline(_pick_data.get("trim_3"),       "#a371f7", "T3")
+                        fig.update_layout(
+                            height=340, margin=dict(l=0, r=0, t=20, b=0),
+                            paper_bgcolor="#0d1117", plot_bgcolor="#0d1117",
+                            xaxis=dict(showgrid=False, color="#7d8590", rangeslider_visible=False),
+                            yaxis=dict(showgrid=True, gridcolor="#21262d", color="#7d8590"),
+                            showlegend=False,
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.caption(f"No OHLCV data for {_chart_ticker} from {_date} — run the pipeline to populate.")
+
+        st.markdown("")
+
+    # --- Other sections ---
+    for _sec_key in _SECTION_ORDER[1:]:
         if _sec_key not in _sections:
             continue
         _sec_picks = _sections[_sec_key]
         st.markdown(f"**{_SECTION_LABELS.get(_sec_key, _sec_key)}**")
 
-        if _sec_key == "portfolio_table":
-            # Rich table: entry / stop / target / size
-            rows_html = ""
-            for p in _sec_picks:
-                _e = f"${p['entry_price']:.2f}" if p.get("entry_price") else "—"
-                _s = f"${p['stop_price']:.2f}"  if p.get("stop_price")  else "—"
-                _t = f"${p['target_price']:.2f}" if p.get("target_price") else "—"
-                _sz = f"{p['position_size_pct']:.1f}%" if p.get("position_size_pct") else "—"
-                rows_html += (
-                    f'<div class="strip" style="margin-bottom:4px">'
-                    f'<div class="cell" style="flex:2;text-align:left;padding-left:10px">'
-                    f'<span style="font-weight:700;color:#e6edf3">{p["ticker"]}</span> '
-                    + _action_badge(p.get("action") or "") + " "
-                    + _in_screener_badge(p["ticker"])
-                    + f'</div>'
-                    f'<div class="cell"><span class="cell-label">ENTRY</span>'
-                    f'<div class="cell-value" style="font-size:13px">{_e}</div></div>'
-                    f'<div class="cell"><span class="cell-label">STOP</span>'
-                    f'<div class="cell-value" style="font-size:13px;color:#f85149">{_s}</div></div>'
-                    f'<div class="cell"><span class="cell-label">TARGET</span>'
-                    f'<div class="cell-value" style="font-size:13px;color:#3fb950">{_t}</div></div>'
-                    f'<div class="cell"><span class="cell-label">SIZE</span>'
-                    f'<div class="cell-value" style="font-size:13px">{_sz}</div></div>'
-                    f'</div>'
-                )
-            if rows_html:
-                st.markdown(rows_html, unsafe_allow_html=True)
-
-        elif _sec_key in ("scan_21dma", "ep_list", "stalklist"):
-            # Compact chip list
+        if _sec_key in ("scan_21dma", "ep_list", "stalklist"):
             chips = " ".join(
                 f'<span style="display:inline-block;padding:3px 8px;margin:2px;'
                 f'background:#161b22;border:1px solid #21262d;border-radius:6px;'
@@ -881,9 +1044,7 @@ def _render_newsletter_page():
                 for p in _sec_picks
             )
             st.markdown(f'<div style="margin-bottom:12px">{chips}</div>', unsafe_allow_html=True)
-
         else:
-            # focus_list + portfolio: rows with action badge + optional price
             for p in _sec_picks:
                 _price_str = ""
                 if p.get("entry_price"):
@@ -902,19 +1063,10 @@ def _render_newsletter_page():
                     unsafe_allow_html=True,
                 )
 
-    # Date navigation — load other available dates
-    try:
-        from database.models import NewsletterMarket, SessionLocal
-        with SessionLocal() as _sess:
-            _all_dates = [
-                r[0] for r in _sess.query(NewsletterMarket.email_date)
-                .order_by(NewsletterMarket.email_date.desc()).limit(20).all()
-            ]
-        if len(_all_dates) > 1:
-            st.divider()
-            st.caption(f"{len(_all_dates)} newsletters in database · showing latest")
-    except Exception:
-        pass
+    _nl_count = len(get_newsletter_dates())
+    if _nl_count > 1:
+        st.divider()
+        st.caption(f"{_nl_count} newsletters in database")
 
 
 # ---------------------------------------------------------------------------
@@ -923,7 +1075,7 @@ def _render_newsletter_page():
 
 # Newsletter page — render and stop before screener code
 if _page == "📧 Alex's Picks":
-    _render_newsletter_page()
+    _render_newsletter_page(_selected_newsletter_date)
     st.stop()
 
 if st.session_state.get("market_open", False):

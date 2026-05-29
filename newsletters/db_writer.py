@@ -69,7 +69,6 @@ def write_newsletter(
 
     for trade in vision_trades:
         ticker = _clean_ticker(trade.get("ticker"))
-        # Require at least entry price to be present (Alex's table has entry but not always stop/target)
         if ticker and trade.get("entry") is not None:
             picks.append({
                 "email_date":       email_date,
@@ -77,7 +76,9 @@ def write_newsletter(
                 "action":           (trade.get("action") or "LONG").upper(),
                 "entry_price":      _f(trade.get("entry")),
                 "stop_price":       _f(trade.get("stop")),
-                "target_price":     _f(trade.get("target")),
+                "target_price":     _f(trade.get("trim_1")),
+                "trim_2":           _f(trade.get("trim_2")),
+                "trim_3":           _f(trade.get("trim_3")),
                 "position_size_pct": _f(trade.get("size_pct")),
                 "notes":            trade.get("notes"),
                 "source_section":   "portfolio_table",
@@ -88,6 +89,8 @@ def write_newsletter(
         for p in picks:
             print(f"  [{p['source_section']}] {p['ticker']} {p['action']}"
                   + (f"  entry={p.get('entry_price')} stop={p.get('stop_price')}"
+                     f"  size={p.get('position_size_pct')}%"
+                     f"  trim1={p.get('target_price')} trim2={p.get('trim_2')} trim3={p.get('trim_3')}"
                      if p.get('entry_price') else ""))
         return
 
@@ -109,8 +112,18 @@ def write_newsletter(
         )
         session.execute(stmt)
 
+        _update_cols = ("entry_price", "stop_price", "target_price", "trim_2", "trim_3",
+                        "position_size_pct", "notes")
         for pick in picks:
-            session.execute(pg_insert(NewsletterPick).values(**pick).on_conflict_do_nothing())
+            stmt = pg_insert(NewsletterPick).values(**pick)
+            if pick.get("source_section") == "portfolio_table":
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=["email_date", "ticker", "action", "source_section"],
+                    set_={c: pick[c] for c in _update_cols if c in pick},
+                )
+            else:
+                stmt = stmt.on_conflict_do_nothing()
+            session.execute(stmt)
 
         session.commit()
 

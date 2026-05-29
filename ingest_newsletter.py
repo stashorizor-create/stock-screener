@@ -2,11 +2,12 @@
 Ingest PrimeTrading newsletter emails from a Google Takeout .mbox file.
 
 Usage:
-    python ingest_newsletter.py                              # default path
-    python ingest_newsletter.py --mbox path/to/file.mbox    # custom path
-    python ingest_newsletter.py --dry-run                    # preview, no DB writes
-    python ingest_newsletter.py --limit 5                    # process only 5 emails
-    python ingest_newsletter.py --mbox file.mbox --dry-run --limit 3
+    python ingest_newsletter.py                                  # full ingest (default)
+    python ingest_newsletter.py --portfolio-only                 # re-run vision only (refresh stop/trim data)
+    python ingest_newsletter.py --mbox path/to/file.mbox        # custom path
+    python ingest_newsletter.py --dry-run                        # preview, no DB writes
+    python ingest_newsletter.py --limit 5                        # process only 5 emails
+    python ingest_newsletter.py --skip 18 --limit 1             # process a specific email by index
 
 The default mbox path is: data/newsletters/primetrading.mbox
 After Google Takeout, unzip and copy the .mbox file to that path.
@@ -32,14 +33,22 @@ DEFAULT_MBOX = ROOT / "data" / "newsletters" / "primetrading.mbox"
 
 def main():
     parser = argparse.ArgumentParser(description="Ingest PrimeTrading newsletter .mbox")
-    parser.add_argument("--mbox",     default=str(DEFAULT_MBOX), help="Path to .mbox file")
-    parser.add_argument("--dry-run",  action="store_true", help="Print output, don't write to DB")
-    parser.add_argument("--limit",    type=int, default=None, help="Process at most N emails")
-    parser.add_argument("--skip",     type=int, default=0,    help="Skip first N emails (by file order)")
+    parser.add_argument("--mbox",             default=str(DEFAULT_MBOX), help="Path to .mbox file")
+    parser.add_argument("--dry-run",          action="store_true", help="Print output, don't write to DB")
+    parser.add_argument("--limit",            type=int, default=None, help="Process at most N emails")
+    parser.add_argument("--skip",             type=int, default=0,    help="Skip first N emails (by file order)")
+    parser.add_argument("--portfolio-only",   action="store_true",
+                        help="Re-run vision extraction only (refresh stop/trim data, skip text extraction)")
     args = parser.parse_args()
 
     from newsletters.runner import run
-    count = run(mbox_path=args.mbox, dry_run=args.dry_run, limit=args.limit, skip=args.skip)
+    count = run(
+        mbox_path=args.mbox,
+        dry_run=args.dry_run,
+        limit=args.limit,
+        skip=args.skip,
+        portfolio_only=args.portfolio_only,
+    )
     print(f"\nFinished — {count} email(s) processed.")
 
 

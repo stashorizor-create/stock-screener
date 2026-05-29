@@ -7,10 +7,17 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
-def run(mbox_path: str | Path, dry_run: bool = False, limit: int | None = None, skip: int = 0) -> int:
+def run(
+    mbox_path: str | Path,
+    dry_run: bool = False,
+    limit: int | None = None,
+    skip: int = 0,
+    portfolio_only: bool = False,
+) -> int:
     """
     Process emails in an .mbox file.
     skip: skip the first N emails (by file order).
+    portfolio_only: skip text extraction — only re-run vision to refresh stop/trim data.
     Returns number of emails successfully processed.
     """
     from config.settings import settings
@@ -55,16 +62,17 @@ def run(mbox_path: str | Path, dry_run: bool = False, limit: int | None = None, 
 
         plain_text = html_to_text(html_body) if html_body else (text_body or "")
 
-        # Text extraction
+        # Text extraction (skipped in portfolio_only mode)
         extracted: dict = {}
-        try:
-            extracted = extract_from_text(plain_text, client)
-            logger.info("  Text: stance=%s focus=%d portfolio=%d",
-                        extracted.get("market_stance", "?"),
-                        len(extracted.get("focus_list") or []),
-                        len(extracted.get("portfolio_moves") or []))
-        except Exception as exc:
-            logger.warning("  Text extraction failed: %s", exc)
+        if not portfolio_only:
+            try:
+                extracted = extract_from_text(plain_text, client)
+                logger.info("  Text: stance=%s focus=%d portfolio=%d",
+                            extracted.get("market_stance", "?"),
+                            len(extracted.get("focus_list") or []),
+                            len(extracted.get("portfolio_moves") or []))
+            except Exception as exc:
+                logger.warning("  Text extraction failed: %s", exc)
 
         # Vision extraction from embedded images
         # Fetch all candidate URLs, sort by file size descending, send largest first
