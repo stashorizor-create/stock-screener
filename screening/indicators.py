@@ -13,8 +13,10 @@ def compute_smas(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def compute_emas(df: pd.DataFrame) -> pd.DataFrame:
-    df["ema_5"] = df["close"].ewm(span=5, adjust=False).mean()
-    df["ema_21"] = df["close"].ewm(span=21, adjust=False).mean()
+    df["ema_5"]        = df["close"].ewm(span=5,  adjust=False).mean()
+    df["ema_21"]       = df["close"].ewm(span=21, adjust=False).mean()
+    df["ema_21_high"]  = df["high"].ewm(span=21,  adjust=False).mean()
+    df["ema_21_low"]   = df["low"].ewm(span=21,   adjust=False).mean()
     return df
 
 

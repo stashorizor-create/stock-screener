@@ -357,10 +357,12 @@ BADGE_COLORS = {
     "gap_up":         "#3fb950",
     "pocket_pivot":   "#f0883e",
     "sma_inside_day": "#58a6ff",
+    "alex_21ema":     "#79c0ff",
 }
 BADGE_LABELS = {
     "vcp": "VCP", "qullamaggie": "Q", "ema_pullback": "EMA5",
     "gap_up": "BGU", "pocket_pivot": "PP", "sma_inside_day": "SMA-ID",
+    "alex_21ema": "21D",
 }
 
 
@@ -709,6 +711,227 @@ def get_ohlcv_for_chart(ticker: str, from_date: str) -> list[dict]:
         return []
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_track_record() -> dict:
+    """Compute cumulative performance stats from all forward tests."""
+    client, err = _supa_client()
+    if err or client is None:
+        return {"error": err or "Supabase unavailable"}
+    try:
+        r = (client.table("newsletter_forward_tests")
+             .select("ticker,email_date,entry_price,current_return_pct,r_multiple,"
+                     "stop_hit,max_mfe_pct,days_held")
+             .limit(2000)
+             .execute())
+        rows = r.data or []
+        if not rows:
+            return {}
+
+        import statistics
+        valid = [
+            row for row in rows
+            if (row.get("entry_price") or 0) >= 5
+            and row.get("current_return_pct") is not None
+            and -100 <= row["current_return_pct"] <= 500
+        ]
+        if not valid:
+            return {}
+
+        returns   = [v["current_return_pct"] for v in valid]
+        r_mults   = [v["r_multiple"] for v in valid if v.get("r_multiple") is not None]
+        max_gains = [v["max_mfe_pct"] for v in valid if v.get("max_mfe_pct") is not None]
+        winners   = sum(1 for r in returns if r > 0)
+        stopped   = sum(1 for v in valid if v.get("stop_hit"))
+
+        by_ret = sorted(valid, key=lambda v: v["current_return_pct"], reverse=True)
+        return {
+            "total":        len(valid),
+            "win_rate":     winners / len(valid),
+            "avg_ret":      sum(returns) / len(returns),
+            "median_ret":   statistics.median(returns),
+            "avg_r":        sum(r_mults) / len(r_mults) if r_mults else None,
+            "stop_rate":    stopped / len(valid),
+            "avg_max_gain": sum(max_gains) / len(max_gains) if max_gains else None,
+            "returns":      returns,
+            "best_5":       by_ret[:5],
+            "worst_5":      list(reversed(by_ret[-5:])),
+        }
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def get_watchlist_tickers(email_date: str) -> list[dict]:
+    """Get watchlist tickers (focus_list, ep_list, stalklist, scan_21dma) for a newsletter date."""
+    client, err = _supa_client()
+    if err or client is None:
+        return []
+    try:
+        r = (client.table("newsletter_picks")
+             .select("ticker,source_section,action")
+             .eq("email_date", email_date)
+             .in_("source_section", ["focus_list", "ep_list", "stalklist", "scan_21dma"])
+             .execute())
+        picks = r.data or []
+        # Deduplicate by ticker, keeping highest-priority section
+        priority = {"focus_list": 0, "ep_list": 1, "stalklist": 2, "scan_21dma": 3}
+        seen: dict[str, dict] = {}
+        for p in picks:
+            t = p["ticker"]
+            if t not in seen or priority.get(p["source_section"], 9) < priority.get(seen[t]["source_section"], 9):
+                seen[t] = p
+        return list(seen.values())
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def compute_watchlist_ohlcv(tickers: tuple[str, ...]) -> dict[str, dict]:
+    """
+    Fetch OHLCV via Borsdata API for each ticker and compute EMA21 cloud scores.
+    Returns {ticker: {df_records, score_dict, error}}.
+    """
+    import pandas as pd
+    from datetime import date, timedelta
+    from data.ingestor import BorsdataClient
+
+    # ── Build ticker → Borsdata insId map (US markets only) ─────────────────
+    _US_MARKET_IDS = {29, 32, 33, 34}
+    sym_to_id: dict[str, int] = {}
+    try:
+        client = BorsdataClient()
+        df_global = client.get_instruments_global()
+        if not df_global.empty:
+            df_us = df_global[df_global["marketId"].isin(_US_MARKET_IDS)]
+            for _, row in df_us.iterrows():
+                sym = str(row.get("ticker") or "").upper().strip()
+                if sym:
+                    sym_to_id[sym] = int(row["insId"])
+    except Exception as exc:
+        return {"_error": str(exc)}
+
+    from_date = date.today() - timedelta(days=200)
+
+    def _score(df: pd.DataFrame) -> dict:
+        if len(df) < 30:
+            return {"total": 0}
+        df = df.copy()
+        df["ema_21"]      = df["close"].ewm(span=21, adjust=False).mean()
+        df["ema_21_high"] = df["high"].ewm(span=21,  adjust=False).mean()
+        df["ema_21_low"]  = df["low"].ewm(span=21,   adjust=False).mean()
+        prev_close        = df["close"].shift(1)
+        tr = pd.concat([
+            df["high"] - df["low"],
+            (df["high"] - prev_close).abs(),
+            (df["low"]  - prev_close).abs(),
+        ], axis=1).max(axis=1)
+        df["atr_14"]     = tr.rolling(14).mean()
+        df["vol_sma_20"] = df["volume"].rolling(20).mean()
+        df["sma_50"]     = df["close"].rolling(50).mean()
+
+        last    = df.iloc[-1]
+        close   = float(last["close"])
+        ema_mid = float(last["ema_21"])
+        ema_hi  = float(last["ema_21_high"])
+        ema_lo  = float(last["ema_21_low"])
+        atr     = float(last["atr_14"])
+        vol_s20 = float(last["vol_sma_20"])
+        sma_50  = float(last["sma_50"])
+
+        # 1. Rising cloud
+        prev_mid  = float(df["ema_21"].iloc[-6]) if len(df) >= 6 else ema_mid
+        rising    = ema_mid > prev_mid
+        slope_pct = (ema_mid - prev_mid) / prev_mid * 100 if prev_mid > 0 else 0.0
+        s_rising  = min(25.0, slope_pct * 5) if rising else 0.0
+
+        # 2. Price in zone
+        in_zone = ema_lo <= close <= ema_hi + atr
+        below   = close < ema_lo
+        if below:
+            s_prox = 0.0
+        elif close <= ema_hi:
+            span   = max(ema_hi - ema_lo, 0.001) + atr
+            s_prox = max(0.0, min(25.0, (1.0 - (close - ema_lo) / span) * 25))
+        else:
+            s_prox = max(0.0, 25.0 * (1.0 - (close - ema_hi) / atr))
+
+        # 3. Higher lows
+        lows   = df["low"].iloc[-20:].values
+        swings = [lows[i] for i in range(1, len(lows) - 1)
+                  if lows[i] <= lows[i - 1] and lows[i] <= lows[i + 1]]
+        if len(swings) >= 2:
+            hl1         = swings[-1] > swings[-2]
+            hl2         = len(swings) >= 3 and swings[-2] > swings[-3]
+            s_hl        = 20.0 if (hl1 and hl2) else (15.0 if hl1 else 0.0)
+            higher_lows = hl1
+        else:
+            s_hl        = 10.0
+            higher_lows = None
+
+        # 4. Pullback volume
+        w  = df.iloc[-15:]
+        dn = w[w["close"] < w["close"].shift(1)]
+        if len(dn) > 0 and vol_s20 > 0:
+            ratio = float(dn["volume"].mean()) / vol_s20
+            s_vol = 20.0 if ratio < 0.6 else (15.0 if ratio < 0.75 else (10.0 if ratio < 1.0 else 0.0))
+        else:
+            ratio = None
+            s_vol = 10.0
+
+        # 5. Compression
+        rng   = float((df["high"].iloc[-5:] - df["low"].iloc[-5:]).mean())
+        comp  = rng / atr if atr > 0 else 1.0
+        s_cmp = 20.0 if comp < 0.7 else (15.0 if comp < 0.85 else (10.0 if comp < 1.0 else 0.0))
+
+        return {
+            "total":       round(s_rising + s_prox + s_hl + s_vol + s_cmp, 1),
+            "rising":      rising,
+            "slope_pct":   round(slope_pct, 2),
+            "in_zone":     in_zone,
+            "below_cloud": below,
+            "higher_lows": higher_lows,
+            "vol_ratio":   round(ratio, 2) if ratio is not None else None,
+            "comp_ratio":  round(comp, 2),
+            "close":       round(close, 2),
+            "ema_hi":      round(ema_hi, 2),
+            "ema_mid":     round(ema_mid, 2),
+            "ema_lo":      round(ema_lo, 2),
+            "atr":         round(atr, 2),
+            "sma_50":      round(sma_50, 2),
+            "entry":       round(ema_hi, 2),
+            "stop":        round(ema_lo, 2),
+            "scores":      {"rising": s_rising, "proximity": s_prox,
+                            "higher_lows": s_hl, "volume": s_vol, "compression": s_cmp},
+        }
+
+    results: dict[str, dict] = {}
+    for ticker in tickers:
+        bid = sym_to_id.get(ticker.upper())
+        if not bid:
+            results[ticker] = {"df": None, "score": {"total": 0}, "error": f"No Borsdata ID for {ticker}"}
+            continue
+        try:
+            df = client.get_ohlcv(bid, from_date=from_date, max_count=200)
+            if df.empty or len(df) < 30:
+                results[ticker] = {"df": None, "score": {"total": 0}, "error": "insufficient data"}
+                continue
+            df = df.reset_index(drop=True)
+            if hasattr(df["date"].iloc[0], "strftime"):
+                df["date"] = df["date"].apply(lambda d: d.strftime("%Y-%m-%d"))
+            else:
+                df["date"] = df["date"].astype(str)
+            score = _score(df)
+            results[ticker] = {
+                "df":    df.tail(80).to_dict("records"),
+                "score": score,
+                "error": None,
+            }
+        except Exception as exc:
+            results[ticker] = {"df": None, "score": {"total": 0}, "error": str(exc)}
+
+    return results
+
+
 # ---------------------------------------------------------------------------
 # Sidebar — filters + ranked list
 # ---------------------------------------------------------------------------
@@ -840,6 +1063,8 @@ with st.sidebar:
 
 
 def _render_newsletter_page(sel_date: str | None = None):
+    import plotly.graph_objects as go
+
     _market, _picks = get_newsletter(sel_date)
 
     st.markdown("## Alex's Picks — PrimeTrading")
@@ -859,214 +1084,521 @@ def _render_newsletter_page(sel_date: str | None = None):
         )
         return
 
-    _date = _market.get("email_date", "")
-    _stance = (_market.get("market_stance") or "unknown").upper()
-    _stance_color = {
-        "BULLISH": "#3fb950", "NEUTRAL": "#e3b341",
-        "CAUTIOUS": "#e3b341", "BEARISH": "#f85149",
-    }.get(_stance, "#7d8590")
+    _tab_track, _tab_watch, _tab_nl = st.tabs(["📊 Track Record", "📋 Watchlist", "📅 Newsletter"])
 
-    st.markdown(
-        f'<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">'
-        f'<span style="color:#8b949e;font-size:13px">{_date}</span>'
-        f'<span style="font-size:12px;font-weight:700;color:{_stance_color};'
-        f'background:{_stance_color}22;border-radius:4px;padding:3px 8px">{_stance}</span>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-    if _market.get("market_notes"):
-        st.markdown(
-            f'<div style="padding:10px 14px;background:#161b22;border-radius:8px;'
-            f'border:1px solid #21262d;color:#8b949e;font-size:13px;margin-bottom:16px">'
-            f'{_market["market_notes"]}</div>',
-            unsafe_allow_html=True,
-        )
-
-    _signal_tickers = {s["symbol"].upper() for s in ALL_SIGNALS}
-
-    def _in_screener_badge(ticker: str) -> str:
-        if ticker.upper() in _signal_tickers:
-            return '<span style="font-size:10px;color:#3fb950;background:#3fb95022;border-radius:4px;padding:2px 6px">✓ screener</span>'
-        return ""
-
-    def _action_badge(action: str) -> str:
-        colors = {
-            "FOCUS": "#388bfd", "LONG": "#3fb950", "ADDED": "#3fb950",
-            "NEW": "#3fb950", "TRIM": "#e3b341", "OUT": "#f85149",
-            "WATCH": "#7d8590", "EP": "#a371f7", "STALK": "#58a6ff",
-        }
-        c = colors.get((action or "").upper(), "#7d8590")
-        return f'<span style="font-size:10px;font-weight:700;color:{c};background:{c}22;border-radius:4px;padding:2px 6px">{(action or "").upper()}</span>'
-
-    _sections: dict[str, list[dict]] = {}
-    for p in _picks:
-        _sections.setdefault(p["source_section"], []).append(p)
-
-    _SECTION_LABELS = {
-        "portfolio_table": "Portfolio",
-        "focus_list":      "Focus List",
-        "portfolio":       "Portfolio Moves",
-        "scan_21dma":      "21 DMA Scan",
-        "ep_list":         "EP List",
-        "stalklist":       "Stalk List",
-    }
-    _SECTION_ORDER = ["portfolio_table", "focus_list", "portfolio", "scan_21dma", "ep_list", "stalklist"]
-
-    # --- Portfolio table section (with forward-test performance) ---
-    if "portfolio_table" in _sections:
-        _pt_picks = _sections["portfolio_table"]
-        _fwd = {r["ticker"]: r for r in get_forward_tests(_date)} if _date else {}
-
-        st.markdown("**Portfolio**")
-
-        # Column headers
-        _hdr = (
-            '<div style="display:flex;gap:4px;padding:0 6px;margin-bottom:2px">'
-            '<div style="flex:2;font-size:10px;color:#7d8590;text-transform:uppercase">Ticker</div>'
-            '<div style="flex:1;text-align:right;font-size:10px;color:#7d8590;text-transform:uppercase">Entry</div>'
-            '<div style="flex:1;text-align:right;font-size:10px;color:#7d8590;text-transform:uppercase">Stop</div>'
-            '<div style="flex:1;text-align:right;font-size:10px;color:#7d8590;text-transform:uppercase">Size</div>'
-            '<div style="flex:1;text-align:right;font-size:10px;color:#7d8590;text-transform:uppercase">T1</div>'
-            '<div style="flex:1;text-align:right;font-size:10px;color:#7d8590;text-transform:uppercase">T2</div>'
-            '<div style="flex:1;text-align:right;font-size:10px;color:#7d8590;text-transform:uppercase">T3</div>'
-            '<div style="flex:1;text-align:right;font-size:10px;color:#7d8590;text-transform:uppercase">Perf</div>'
-            '</div>'
-        )
-        st.markdown(_hdr, unsafe_allow_html=True)
-
-        rows_html = ""
-        for p in _pt_picks:
-            tk = p["ticker"]
-            _e  = f"${p['entry_price']:.2f}"       if p.get("entry_price")       else "—"
-            _s  = f"${p['stop_price']:.2f}"         if p.get("stop_price")         else "—"
-            _sz = f"{p['position_size_pct']:.1f}%"  if p.get("position_size_pct") else "—"
-            _t1 = f"${p['target_price']:.0f}"       if p.get("target_price")       else "—"
-            _t2 = f"${p['trim_2']:.0f}"              if p.get("trim_2")              else "—"
-            _t3 = f"${p['trim_3']:.0f}"              if p.get("trim_3")              else "—"
-
-            fwd = _fwd.get(tk, {})
-            _ret = fwd.get("current_return_pct")
-            if _ret is not None:
-                _ret_color = "#3fb950" if _ret >= 0 else "#f85149"
-                _stopped = fwd.get("stop_hit") or fwd.get("status") == "stopped"
-                _perf = (f'<span style="color:{_ret_color};font-size:12px;font-weight:700">'
-                         f'{"⛔ " if _stopped else ""}{_ret:+.1f}%</span>')
-                _r = fwd.get("r_multiple")
-                if _r is not None:
-                    _r_color = "#3fb950" if _r >= 0 else "#f85149"
-                    _perf += f'<span style="color:{_r_color};font-size:10px;margin-left:4px">{_r:+.1f}R</span>'
-            else:
-                _perf = '<span style="color:#7d8590;font-size:11px">—</span>'
-
-            rows_html += (
-                f'<div style="display:flex;gap:4px;align-items:center;'
-                f'padding:5px 6px;background:#0d1117;border-radius:6px;'
-                f'border:1px solid #21262d;margin-bottom:3px">'
-                f'<div style="flex:2;display:flex;align-items:center;gap:5px">'
-                f'<span style="font-weight:700;color:#e6edf3;font-size:13px">{tk}</span>'
-                + _action_badge(p.get("action") or "") + " "
-                + _in_screener_badge(tk)
-                + f'</div>'
-                f'<div style="flex:1;text-align:right;font-size:12px;color:#e6edf3">{_e}</div>'
-                f'<div style="flex:1;text-align:right;font-size:12px;color:#f85149">{_s}</div>'
-                f'<div style="flex:1;text-align:right;font-size:12px;color:#8b949e">{_sz}</div>'
-                f'<div style="flex:1;text-align:right;font-size:12px;color:#3fb950">{_t1}</div>'
-                f'<div style="flex:1;text-align:right;font-size:12px;color:#3fb950">{_t2}</div>'
-                f'<div style="flex:1;text-align:right;font-size:12px;color:#3fb950">{_t3}</div>'
-                f'<div style="flex:1;text-align:right">{_perf}</div>'
-                f'</div>'
-            )
-        if rows_html:
-            st.markdown(rows_html, unsafe_allow_html=True)
-
-        # --- Chart for selected position ---
-        if _pt_picks and _date:
-            _tickers_with_fwd = [p["ticker"] for p in _pt_picks if p.get("entry_price")]
-            if _tickers_with_fwd:
-                _chart_ticker = st.selectbox(
-                    "Chart position", ["— none —"] + _tickers_with_fwd,
-                    key="nl_chart_sel", label_visibility="collapsed",
-                )
-                if _chart_ticker and _chart_ticker != "— none —":
-                    _ohlcv = get_ohlcv_for_chart(_chart_ticker, _date)
-                    _pick_data = next((p for p in _pt_picks if p["ticker"] == _chart_ticker), {})
-                    if _ohlcv:
-                        import plotly.graph_objects as go
-                        _dates   = [r["date"]  for r in _ohlcv]
-                        _closes  = [r["close"] for r in _ohlcv]
-                        _highs   = [r["high"]  for r in _ohlcv]
-                        _lows    = [r["low"]   for r in _ohlcv]
-                        _opens   = [r["open"]  for r in _ohlcv]
-                        fig = go.Figure()
-                        fig.add_trace(go.Candlestick(
-                            x=_dates, open=_opens, high=_highs, low=_lows, close=_closes,
-                            name=_chart_ticker,
-                            increasing_line_color="#3fb950", decreasing_line_color="#f85149",
-                        ))
-                        def _hline(price, color, label, dash="dot"):
-                            if price is None:
-                                return
-                            fig.add_hline(y=price, line_color=color, line_dash=dash, line_width=1,
-                                          annotation_text=f" {label} ${price:.2f}",
-                                          annotation_font_color=color, annotation_font_size=10)
-                        _hline(_pick_data.get("entry_price"), "#388bfd",  "Entry")
-                        _hline(_pick_data.get("stop_price"),  "#f85149",  "Stop")
-                        _hline(_pick_data.get("target_price"), "#3fb950", "T1")
-                        _hline(_pick_data.get("trim_2"),       "#58a6ff", "T2")
-                        _hline(_pick_data.get("trim_3"),       "#a371f7", "T3")
-                        fig.update_layout(
-                            height=340, margin=dict(l=0, r=0, t=20, b=0),
-                            paper_bgcolor="#0d1117", plot_bgcolor="#0d1117",
-                            xaxis=dict(showgrid=False, color="#7d8590", rangeslider_visible=False),
-                            yaxis=dict(showgrid=True, gridcolor="#21262d", color="#7d8590"),
-                            showlegend=False,
-                        )
-                        st.plotly_chart(fig, use_container_width=True)
-                    else:
-                        st.caption(f"No OHLCV data for {_chart_ticker} from {_date} — run the pipeline to populate.")
-
-        st.markdown("")
-
-    # --- Other sections ---
-    for _sec_key in _SECTION_ORDER[1:]:
-        if _sec_key not in _sections:
-            continue
-        _sec_picks = _sections[_sec_key]
-        st.markdown(f"**{_SECTION_LABELS.get(_sec_key, _sec_key)}**")
-
-        if _sec_key in ("scan_21dma", "ep_list", "stalklist"):
-            chips = " ".join(
-                f'<span style="display:inline-block;padding:3px 8px;margin:2px;'
-                f'background:#161b22;border:1px solid #21262d;border-radius:6px;'
-                f'font-size:13px;font-weight:700;color:#e6edf3">'
-                f'{p["ticker"]}</span>'
-                + _in_screener_badge(p["ticker"])
-                for p in _sec_picks
-            )
-            st.markdown(f'<div style="margin-bottom:12px">{chips}</div>', unsafe_allow_html=True)
+    # ── Track Record tab ──────────────────────────────────────────────────────
+    with _tab_track:
+        _tr = get_track_record()
+        if _tr.get("error"):
+            st.error(f"Track record error: {_tr['error']}")
+        elif not _tr:
+            st.info("No forward test data yet. Run `python forward_test.py` to compute metrics.")
         else:
-            for p in _sec_picks:
-                _price_str = ""
-                if p.get("entry_price"):
-                    _price_str = f' <span style="color:#8b949e;font-size:12px">@ ${p["entry_price"]:.2f}</span>'
+            _wr   = _tr["win_rate"]
+            _ar   = _tr["avg_ret"]
+            _mr   = _tr["median_ret"]
+            _avgr = _tr.get("avg_r")
+            _sr   = _tr["stop_rate"]
+            _amg  = _tr.get("avg_max_gain")
+
+            _wr_color = "#3fb950" if _wr >= 0.6 else ("#e3b341" if _wr >= 0.5 else "#f85149")
+            _ar_color = "#3fb950" if _ar > 0 else "#f85149"
+
+            st.markdown(strip_html([
+                ("Picks",      f'<span class="white">{_tr["total"]}</span>'),
+                ("Win Rate",   f'<span style="color:{_wr_color};font-weight:700">{_wr:.0%}</span>'),
+                ("Avg Return", f'<span style="color:{_ar_color};font-weight:700">{_ar:+.1f}%</span>'),
+                ("Median Ret", f'<span style="color:{_ar_color}">{_mr:+.1f}%</span>'),
+                ("Avg R",      f'<span class="green">{_avgr:+.2f}R</span>' if _avgr is not None else '<span class="grey">—</span>'),
+                ("Stopped",    f'<span class="yellow">{_sr:.0%}</span>'),
+                ("Max Gain",   f'<span class="green">{_amg:+.1f}%</span>' if _amg is not None else '<span class="grey">—</span>'),
+            ]), unsafe_allow_html=True)
+
+            # Return distribution histogram
+            _neg_ret = [r for r in _tr["returns"] if r < 0]
+            _pos_ret = [r for r in _tr["returns"] if r >= 0]
+            fig_dist = go.Figure()
+            if _neg_ret:
+                fig_dist.add_trace(go.Histogram(
+                    x=_neg_ret, xbins=dict(start=-100, end=0, size=25),
+                    marker_color="#f85149", name="Loss", opacity=0.85,
+                ))
+            if _pos_ret:
+                fig_dist.add_trace(go.Histogram(
+                    x=_pos_ret, xbins=dict(start=0, end=510, size=25),
+                    marker_color="#3fb950", name="Win", opacity=0.85,
+                ))
+            fig_dist.update_layout(
+                height=260, margin=dict(l=0, r=0, t=10, b=30),
+                paper_bgcolor="#0d1117", plot_bgcolor="#0d1117",
+                xaxis=dict(title="Return %", color="#7d8590", showgrid=False),
+                yaxis=dict(color="#7d8590", gridcolor="#21262d"),
+                showlegend=False, bargap=0.05,
+            )
+            st.plotly_chart(fig_dist, use_container_width=True)
+
+            # Best / Worst trades
+            _bc1, _bc2 = st.columns(2)
+            with _bc1:
+                st.markdown("**Best Trades**")
+                for _v in _tr.get("best_5", []):
+                    _r_str = f"{_v['r_multiple']:+.1f}R" if _v.get("r_multiple") is not None else ""
+                    st.markdown(
+                        f'<div style="display:flex;justify-content:space-between;align-items:center;'
+                        f'padding:5px 8px;background:#0d1117;border-radius:6px;'
+                        f'border:1px solid #21262d;margin-bottom:3px">'
+                        f'<span style="font-weight:700;color:#e6edf3">{_v["ticker"]}</span>'
+                        f'<span style="color:#7d8590;font-size:11px">{_v["email_date"]}</span>'
+                        f'<span style="color:#3fb950;font-weight:700">{_v["current_return_pct"]:+.1f}%</span>'
+                        + (f'<span style="color:#3fb950;font-size:10px;margin-left:4px">{_r_str}</span>' if _r_str else "")
+                        + '</div>',
+                        unsafe_allow_html=True,
+                    )
+            with _bc2:
+                st.markdown("**Worst Trades**")
+                for _v in _tr.get("worst_5", []):
+                    _r_str = f"{_v['r_multiple']:+.1f}R" if _v.get("r_multiple") is not None else ""
+                    _stop_icon = "⛔ " if _v.get("stop_hit") else ""
+                    st.markdown(
+                        f'<div style="display:flex;justify-content:space-between;align-items:center;'
+                        f'padding:5px 8px;background:#0d1117;border-radius:6px;'
+                        f'border:1px solid #21262d;margin-bottom:3px">'
+                        f'<span style="font-weight:700;color:#e6edf3">{_v["ticker"]}</span>'
+                        f'<span style="color:#7d8590;font-size:11px">{_v["email_date"]}</span>'
+                        f'<span style="color:#f85149;font-weight:700">{_stop_icon}{_v["current_return_pct"]:+.1f}%</span>'
+                        + (f'<span style="color:#f85149;font-size:10px;margin-left:4px">{_r_str}</span>' if _r_str else "")
+                        + '</div>',
+                        unsafe_allow_html=True,
+                    )
+
+    # ── Watchlist tab ──────────────────────────────────────────────────────────
+    with _tab_watch:
+        _date_for_watch = _market.get("email_date", "") if _market else ""
+        _wl_picks = get_watchlist_tickers(_date_for_watch) if _date_for_watch else []
+
+        if not _wl_picks:
+            st.info("No watchlist entries (focus_list / EP list / stalk list) in this newsletter.")
+        else:
+            _wl_tickers = tuple(sorted(p["ticker"] for p in _wl_picks))
+            _wl_section = {p["ticker"]: p["source_section"] for p in _wl_picks}
+
+            with st.spinner(f"Loading OHLCV for {len(_wl_tickers)} tickers…"):
+                _wl_data = compute_watchlist_ohlcv(_wl_tickers)
+
+            # Screener lookup: {symbol → composite_score}
+            _screener_map = {s["symbol"].upper(): s["composite_score"] for s in ALL_SIGNALS}
+
+            # Build scored rows
+            _SECTION_SHORT = {
+                "focus_list": "FOCUS", "ep_list": "EP",
+                "stalklist": "STALK", "scan_21dma": "21D",
+            }
+            _SECTION_COLOR = {
+                "focus_list": "#388bfd", "ep_list": "#a371f7",
+                "stalklist":  "#58a6ff", "scan_21dma": "#e3b341",
+            }
+
+            _rows = []
+            for tk in _wl_tickers:
+                d    = _wl_data.get(tk, {})
+                sc   = d.get("score", {})
+                _rows.append({
+                    "ticker":      tk,
+                    "section":     _wl_section.get(tk, ""),
+                    "alex_score":  sc.get("total", 0),
+                    "score_data":  sc,
+                    "in_screener": tk in _screener_map,
+                    "comp_score":  _screener_map.get(tk),
+                    "has_data":    d.get("df") is not None,
+                    "error":       d.get("error"),
+                })
+            _rows.sort(key=lambda r: r["alex_score"], reverse=True)
+
+            # Header
+            st.markdown(
+                f'<div style="display:flex;justify-content:space-between;'
+                f'align-items:center;margin-bottom:6px">'
+                f'<span style="color:#7d8590;font-size:11px;text-transform:uppercase;'
+                f'letter-spacing:0.6px">{len(_rows)} stocks · {_date_for_watch}</span>'
+                f'<span style="color:#7d8590;font-size:11px">21D score = cloud rising · in zone · higher lows · low vol · compression</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+            # Stock list
+            for row in _rows:
+                tk   = row["ticker"]
+                sc   = row["score_data"]
+                alx  = row["alex_score"]
+                sec  = row["section"]
+                sect_label = _SECTION_SHORT.get(sec, sec[:4].upper())
+                sect_color = _SECTION_COLOR.get(sec, "#7d8590")
+                alx_color  = "#3fb950" if alx >= 70 else ("#e3b341" if alx >= 45 else "#f85149")
+
+                def _dot(val, key=None):
+                    if key and sc.get("scores"):
+                        s = sc["scores"].get(key, 0)
+                        c = "#3fb950" if s >= 15 else ("#e3b341" if s >= 8 else "#484f58")
+                    elif val is True:
+                        c = "#3fb950"
+                    elif val is False:
+                        c = "#f85149"
+                    else:
+                        c = "#e3b341"
+                    return f'<span style="color:{c};font-size:14px">●</span>'
+
+                _criteria = (
+                    _dot(sc.get("rising"), "rising")
+                    + _dot(sc.get("in_zone"), "proximity")
+                    + _dot(sc.get("higher_lows"), "higher_lows")
+                    + _dot(sc.get("vol_ratio", 1.0) is not None and (sc.get("vol_ratio") or 1.0) < 0.75, "volume")
+                    + _dot(sc.get("comp_ratio", 1.0) is not None and (sc.get("comp_ratio") or 1.0) < 0.85, "compression")
+                )
+
+                _comp_badge = ""
+                if row["in_screener"] and row["comp_score"] is not None:
+                    _cc = "#3fb950" if row["comp_score"] >= 75 else ("#e3b341" if row["comp_score"] >= 60 else "#f85149")
+                    _comp_badge = (f'<span style="font-size:10px;font-weight:700;color:{_cc};'
+                                   f'background:{_cc}22;border-radius:4px;padding:2px 6px;margin-left:4px">'
+                                   f'screener {row["comp_score"]:.0f}</span>')
+                elif not row["in_screener"]:
+                    _comp_badge = ('<span style="font-size:10px;font-weight:700;color:#a371f7;'
+                                   'background:#a371f722;border-radius:4px;padding:2px 6px;margin-left:4px">'
+                                   '⚡ Alex only</span>')
+
+                _lvls = ""
+                if sc.get("entry"):
+                    _lvls = (f'<span style="color:#8b949e;font-size:11px;margin-left:8px">'
+                             f'entry ${sc["entry"]:.2f} · stop ${sc["stop"]:.2f}</span>')
+
                 st.markdown(
-                    f'<div style="display:flex;align-items:center;gap:8px;'
-                    f'padding:6px 10px;background:#161b22;border-radius:6px;'
-                    f'border:1px solid #21262d;margin-bottom:4px">'
-                    f'<span style="font-weight:700;color:#e6edf3;min-width:60px">{p["ticker"]}</span>'
-                    + _action_badge(p.get("action") or "")
-                    + _price_str + " "
-                    + _in_screener_badge(p["ticker"])
-                    + (f'<span style="color:#7d8590;font-size:11px;margin-left:auto">{p["notes"]}</span>'
-                       if p.get("notes") else "")
-                    + "</div>",
+                    f'<div style="display:flex;align-items:center;gap:6px;'
+                    f'padding:6px 8px;background:#0d1117;border-radius:6px;'
+                    f'border:1px solid #21262d;margin-bottom:3px">'
+                    f'<span style="font-weight:700;color:#e6edf3;min-width:52px">{tk}</span>'
+                    f'<span style="font-size:10px;font-weight:700;color:{sect_color};'
+                    f'background:{sect_color}22;border-radius:4px;padding:2px 5px">{sect_label}</span>'
+                    + _comp_badge
+                    + f'<span style="flex:1"></span>'
+                    + _criteria
+                    + f'<span style="color:{alx_color};font-weight:700;font-size:13px;'
+                    f'min-width:28px;text-align:right">{alx:.0f}</span>'
+                    + _lvls
+                    + f'</div>',
                     unsafe_allow_html=True,
                 )
 
-    _nl_count = len(get_newsletter_dates())
-    if _nl_count > 1:
-        st.divider()
-        st.caption(f"{_nl_count} newsletters in database")
+            # Cloud chart for selected ticker
+            st.markdown("---")
+            _chart_options = [tk for tk in [r["ticker"] for r in _rows] if _wl_data.get(tk, {}).get("df")]
+            _failed = [r["ticker"] for r in _rows if not _wl_data.get(r["ticker"], {}).get("df")]
+            if _chart_options:
+                if _failed:
+                    st.caption(f"Charts loaded for {len(_chart_options)}/{len(_rows)} tickers · no Borsdata data for: {', '.join(_failed)}")
+                _sel = st.selectbox(
+                    "Select ticker to view cloud chart",
+                    _chart_options, key="wl_chart_sel",
+                    format_func=lambda t: f"{t}  (score {next(r['alex_score'] for r in _rows if r['ticker']==t):.0f})",
+                )
+            else:
+                st.warning(f"No chart data loaded. Borsdata could not find OHLCV for: {', '.join(_failed) if _failed else 'any tickers'}")
+                if _sel:
+                    _ohlcv_records = _wl_data[_sel]["df"]
+                    _sc = _wl_data[_sel]["score"]
+                    if _ohlcv_records:
+                        from plotly.subplots import make_subplots
+                        _dates  = [r["date"]   for r in _ohlcv_records]
+                        _opens  = [r["open"]   for r in _ohlcv_records]
+                        _highs  = [r["high"]   for r in _ohlcv_records]
+                        _lows   = [r["low"]    for r in _ohlcv_records]
+                        _closes = [r["close"]  for r in _ohlcv_records]
+                        _vols   = [r["volume"] for r in _ohlcv_records]
+
+                        # Recompute cloud on the slice for chart (last 80 rows already in df)
+                        import pandas as _pd
+                        _cdf = _pd.DataFrame(_ohlcv_records)
+                        _cdf["ema_21"]      = _cdf["close"].ewm(span=21, adjust=False).mean()
+                        _cdf["ema_21_high"] = _cdf["high"].ewm(span=21,  adjust=False).mean()
+                        _cdf["ema_21_low"]  = _cdf["low"].ewm(span=21,   adjust=False).mean()
+                        _cdf["vol_sma_20"]  = _cdf["volume"].rolling(20).mean()
+
+                        _ema_mid = _cdf["ema_21"].tolist()
+                        _ema_hi  = _cdf["ema_21_high"].tolist()
+                        _ema_lo  = _cdf["ema_21_low"].tolist()
+                        _vol_avg = _cdf["vol_sma_20"].tolist()
+
+                        _fig = make_subplots(
+                            rows=2, cols=1, shared_xaxes=True,
+                            row_heights=[0.72, 0.28], vertical_spacing=0.02,
+                        )
+                        # Cloud: low band first, then high band filled to it
+                        _fig.add_trace(go.Scatter(
+                            x=_dates, y=_ema_lo,
+                            line=dict(color="rgba(56,139,253,0.35)", width=1),
+                            showlegend=False, name="Cloud low",
+                        ), row=1, col=1)
+                        _fig.add_trace(go.Scatter(
+                            x=_dates, y=_ema_hi,
+                            fill="tonexty", fillcolor="rgba(56,139,253,0.12)",
+                            line=dict(color="rgba(56,139,253,0.35)", width=1),
+                            showlegend=False, name="Cloud high",
+                        ), row=1, col=1)
+                        # EMA21 midline
+                        _fig.add_trace(go.Scatter(
+                            x=_dates, y=_ema_mid,
+                            line=dict(color="#388bfd", width=1.5),
+                            showlegend=False, name="EMA21",
+                        ), row=1, col=1)
+                        # Candlestick
+                        _fig.add_trace(go.Candlestick(
+                            x=_dates, open=_opens, high=_highs, low=_lows, close=_closes,
+                            name=_sel,
+                            increasing_line_color="#3fb950", decreasing_line_color="#f85149",
+                        ), row=1, col=1)
+                        # Volume bars
+                        _vol_colors = ["#3fb950" if c >= o else "#f85149"
+                                       for c, o in zip(_closes, _opens)]
+                        _fig.add_trace(go.Bar(
+                            x=_dates, y=_vols, marker_color=_vol_colors,
+                            showlegend=False, name="Volume",
+                        ), row=2, col=1)
+                        # Volume SMA line
+                        _fig.add_trace(go.Scatter(
+                            x=_dates, y=_vol_avg,
+                            line=dict(color="#e3b341", width=1),
+                            showlegend=False, name="Vol SMA20",
+                        ), row=2, col=1)
+                        _fig.update_layout(
+                            height=400, margin=dict(l=0, r=0, t=16, b=0),
+                            paper_bgcolor="#0d1117", plot_bgcolor="#0d1117",
+                            xaxis=dict(showgrid=False, color="#7d8590", rangeslider_visible=False),
+                            yaxis=dict(showgrid=True, gridcolor="#21262d", color="#7d8590"),
+                            xaxis2=dict(showgrid=False, color="#7d8590"),
+                            yaxis2=dict(showgrid=True, gridcolor="#21262d", color="#7d8590"),
+                            showlegend=False,
+                        )
+                        st.plotly_chart(_fig, use_container_width=True)
+
+                        # Score breakdown
+                        if _sc.get("scores"):
+                            _s = _sc["scores"]
+                            st.markdown(strip_html([
+                                ("Rising",      f'<span style="color:{"#3fb950" if _s["rising"]>=15 else "#e3b341"}">{_s["rising"]:.0f}/25</span>'),
+                                ("In Zone",     f'<span style="color:{"#3fb950" if _s["proximity"]>=15 else "#e3b341"}">{_s["proximity"]:.0f}/25</span>'),
+                                ("Higher Lows", f'<span style="color:{"#3fb950" if _s["higher_lows"]>=15 else "#e3b341"}">{_s["higher_lows"]:.0f}/20</span>'),
+                                ("Low Vol",     f'<span style="color:{"#3fb950" if _s["volume"]>=15 else "#e3b341"}">{_s["volume"]:.0f}/20</span>'),
+                                ("Compress",    f'<span style="color:{"#3fb950" if _s["compression"]>=15 else "#e3b341"}">{_s["compression"]:.0f}/20</span>'),
+                                ("Total",       f'<span style="font-weight:700;color:{"#3fb950" if _sc["total"]>=70 else "#e3b341"}">{_sc["total"]:.0f}/110</span>'),
+                            ]), unsafe_allow_html=True)
+
+    # ── Newsletter tab ─────────────────────────────────────────────────────────
+    with _tab_nl:
+        _date = _market.get("email_date", "")
+        _stance = (_market.get("market_stance") or "unknown").upper()
+        _stance_color = {
+            "BULLISH": "#3fb950", "NEUTRAL": "#e3b341",
+            "CAUTIOUS": "#e3b341", "BEARISH": "#f85149",
+        }.get(_stance, "#7d8590")
+
+        st.markdown(
+            f'<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">'
+            f'<span style="color:#8b949e;font-size:13px">{_date}</span>'
+            f'<span style="font-size:12px;font-weight:700;color:{_stance_color};'
+            f'background:{_stance_color}22;border-radius:4px;padding:3px 8px">{_stance}</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        if _market.get("market_notes"):
+            st.markdown(
+                f'<div style="padding:10px 14px;background:#161b22;border-radius:8px;'
+                f'border:1px solid #21262d;color:#8b949e;font-size:13px;margin-bottom:16px">'
+                f'{_market["market_notes"]}</div>',
+                unsafe_allow_html=True,
+            )
+
+        _signal_tickers = {s["symbol"].upper() for s in ALL_SIGNALS}
+
+        def _in_screener_badge(ticker: str) -> str:
+            if ticker.upper() in _signal_tickers:
+                return '<span style="font-size:10px;color:#3fb950;background:#3fb95022;border-radius:4px;padding:2px 6px">✓ screener</span>'
+            return ""
+
+        def _action_badge(action: str) -> str:
+            colors = {
+                "FOCUS": "#388bfd", "LONG": "#3fb950", "ADDED": "#3fb950",
+                "NEW": "#3fb950", "TRIM": "#e3b341", "OUT": "#f85149",
+                "WATCH": "#7d8590", "EP": "#a371f7", "STALK": "#58a6ff",
+            }
+            c = colors.get((action or "").upper(), "#7d8590")
+            return f'<span style="font-size:10px;font-weight:700;color:{c};background:{c}22;border-radius:4px;padding:2px 6px">{(action or "").upper()}</span>'
+
+        _sections: dict[str, list[dict]] = {}
+        for p in _picks:
+            _sections.setdefault(p["source_section"], []).append(p)
+
+        _SECTION_LABELS = {
+            "portfolio_table": "Portfolio",
+            "focus_list":      "Focus List",
+            "portfolio":       "Portfolio Moves",
+            "scan_21dma":      "21 DMA Scan",
+            "ep_list":         "EP List",
+            "stalklist":       "Stalk List",
+        }
+        _SECTION_ORDER = ["portfolio_table", "focus_list", "portfolio", "scan_21dma", "ep_list", "stalklist"]
+
+        # --- Portfolio table section (with forward-test performance) ---
+        if "portfolio_table" in _sections:
+            _pt_picks = _sections["portfolio_table"]
+            _fwd = {r["ticker"]: r for r in get_forward_tests(_date)} if _date else {}
+
+            st.markdown("**Portfolio**")
+
+            _hdr = (
+                '<div style="display:flex;gap:4px;padding:0 6px;margin-bottom:2px">'
+                '<div style="flex:2;font-size:10px;color:#7d8590;text-transform:uppercase">Ticker</div>'
+                '<div style="flex:1;text-align:right;font-size:10px;color:#7d8590;text-transform:uppercase">Entry</div>'
+                '<div style="flex:1;text-align:right;font-size:10px;color:#7d8590;text-transform:uppercase">Stop</div>'
+                '<div style="flex:1;text-align:right;font-size:10px;color:#7d8590;text-transform:uppercase">Size</div>'
+                '<div style="flex:1;text-align:right;font-size:10px;color:#7d8590;text-transform:uppercase">T1</div>'
+                '<div style="flex:1;text-align:right;font-size:10px;color:#7d8590;text-transform:uppercase">T2</div>'
+                '<div style="flex:1;text-align:right;font-size:10px;color:#7d8590;text-transform:uppercase">T3</div>'
+                '<div style="flex:1;text-align:right;font-size:10px;color:#7d8590;text-transform:uppercase">Perf</div>'
+                '</div>'
+            )
+            st.markdown(_hdr, unsafe_allow_html=True)
+
+            rows_html = ""
+            for p in _pt_picks:
+                tk = p["ticker"]
+                _e  = f"${p['entry_price']:.2f}"       if p.get("entry_price")       else "—"
+                _s  = f"${p['stop_price']:.2f}"         if p.get("stop_price")         else "—"
+                _sz = f"{p['position_size_pct']:.1f}%"  if p.get("position_size_pct") else "—"
+                _t1 = f"${p['target_price']:.0f}"       if p.get("target_price")       else "—"
+                _t2 = f"${p['trim_2']:.0f}"              if p.get("trim_2")              else "—"
+                _t3 = f"${p['trim_3']:.0f}"              if p.get("trim_3")              else "—"
+
+                fwd = _fwd.get(tk, {})
+                _ret = fwd.get("current_return_pct")
+                if _ret is not None:
+                    _ret_color = "#3fb950" if _ret >= 0 else "#f85149"
+                    _stopped = fwd.get("stop_hit") or fwd.get("status") == "stopped"
+                    _perf = (f'<span style="color:{_ret_color};font-size:12px;font-weight:700">'
+                             f'{"⛔ " if _stopped else ""}{_ret:+.1f}%</span>')
+                    _r = fwd.get("r_multiple")
+                    if _r is not None:
+                        _r_color = "#3fb950" if _r >= 0 else "#f85149"
+                        _perf += f'<span style="color:{_r_color};font-size:10px;margin-left:4px">{_r:+.1f}R</span>'
+                else:
+                    _perf = '<span style="color:#7d8590;font-size:11px">—</span>'
+
+                rows_html += (
+                    f'<div style="display:flex;gap:4px;align-items:center;'
+                    f'padding:5px 6px;background:#0d1117;border-radius:6px;'
+                    f'border:1px solid #21262d;margin-bottom:3px">'
+                    f'<div style="flex:2;display:flex;align-items:center;gap:5px">'
+                    f'<span style="font-weight:700;color:#e6edf3;font-size:13px">{tk}</span>'
+                    + _action_badge(p.get("action") or "") + " "
+                    + _in_screener_badge(tk)
+                    + f'</div>'
+                    f'<div style="flex:1;text-align:right;font-size:12px;color:#e6edf3">{_e}</div>'
+                    f'<div style="flex:1;text-align:right;font-size:12px;color:#f85149">{_s}</div>'
+                    f'<div style="flex:1;text-align:right;font-size:12px;color:#8b949e">{_sz}</div>'
+                    f'<div style="flex:1;text-align:right;font-size:12px;color:#3fb950">{_t1}</div>'
+                    f'<div style="flex:1;text-align:right;font-size:12px;color:#3fb950">{_t2}</div>'
+                    f'<div style="flex:1;text-align:right;font-size:12px;color:#3fb950">{_t3}</div>'
+                    f'<div style="flex:1;text-align:right">{_perf}</div>'
+                    f'</div>'
+                )
+            if rows_html:
+                st.markdown(rows_html, unsafe_allow_html=True)
+
+            # --- Chart for selected position ---
+            if _pt_picks and _date:
+                _tickers_with_fwd = [p["ticker"] for p in _pt_picks if p.get("entry_price")]
+                if _tickers_with_fwd:
+                    _chart_ticker = st.selectbox(
+                        "Chart position", ["— none —"] + _tickers_with_fwd,
+                        key="nl_chart_sel", label_visibility="collapsed",
+                    )
+                    if _chart_ticker and _chart_ticker != "— none —":
+                        _ohlcv = get_ohlcv_for_chart(_chart_ticker, _date)
+                        _pick_data = next((p for p in _pt_picks if p["ticker"] == _chart_ticker), {})
+                        if _ohlcv:
+                            _dates   = [r["date"]  for r in _ohlcv]
+                            _closes  = [r["close"] for r in _ohlcv]
+                            _highs   = [r["high"]  for r in _ohlcv]
+                            _lows    = [r["low"]   for r in _ohlcv]
+                            _opens   = [r["open"]  for r in _ohlcv]
+                            fig = go.Figure()
+                            fig.add_trace(go.Candlestick(
+                                x=_dates, open=_opens, high=_highs, low=_lows, close=_closes,
+                                name=_chart_ticker,
+                                increasing_line_color="#3fb950", decreasing_line_color="#f85149",
+                            ))
+                            def _hline(price, color, label, dash="dot"):
+                                if price is None:
+                                    return
+                                fig.add_hline(y=price, line_color=color, line_dash=dash, line_width=1,
+                                              annotation_text=f" {label} ${price:.2f}",
+                                              annotation_font_color=color, annotation_font_size=10)
+                            _hline(_pick_data.get("entry_price"), "#388bfd",  "Entry")
+                            _hline(_pick_data.get("stop_price"),  "#f85149",  "Stop")
+                            _hline(_pick_data.get("target_price"), "#3fb950", "T1")
+                            _hline(_pick_data.get("trim_2"),       "#58a6ff", "T2")
+                            _hline(_pick_data.get("trim_3"),       "#a371f7", "T3")
+                            fig.update_layout(
+                                height=340, margin=dict(l=0, r=0, t=20, b=0),
+                                paper_bgcolor="#0d1117", plot_bgcolor="#0d1117",
+                                xaxis=dict(showgrid=False, color="#7d8590", rangeslider_visible=False),
+                                yaxis=dict(showgrid=True, gridcolor="#21262d", color="#7d8590"),
+                                showlegend=False,
+                            )
+                            st.plotly_chart(fig, use_container_width=True)
+                        else:
+                            st.caption(f"No OHLCV data for {_chart_ticker} from {_date} — run the pipeline to populate.")
+
+            st.markdown("")
+
+        # --- Other sections ---
+        for _sec_key in _SECTION_ORDER[1:]:
+            if _sec_key not in _sections:
+                continue
+            _sec_picks = _sections[_sec_key]
+            st.markdown(f"**{_SECTION_LABELS.get(_sec_key, _sec_key)}**")
+
+            if _sec_key in ("scan_21dma", "ep_list", "stalklist"):
+                chips = " ".join(
+                    f'<span style="display:inline-block;padding:3px 8px;margin:2px;'
+                    f'background:#161b22;border:1px solid #21262d;border-radius:6px;'
+                    f'font-size:13px;font-weight:700;color:#e6edf3">'
+                    f'{p["ticker"]}</span>'
+                    + _in_screener_badge(p["ticker"])
+                    for p in _sec_picks
+                )
+                st.markdown(f'<div style="margin-bottom:12px">{chips}</div>', unsafe_allow_html=True)
+            else:
+                for p in _sec_picks:
+                    _price_str = ""
+                    if p.get("entry_price"):
+                        _price_str = f' <span style="color:#8b949e;font-size:12px">@ ${p["entry_price"]:.2f}</span>'
+                    st.markdown(
+                        f'<div style="display:flex;align-items:center;gap:8px;'
+                        f'padding:6px 10px;background:#161b22;border-radius:6px;'
+                        f'border:1px solid #21262d;margin-bottom:4px">'
+                        f'<span style="font-weight:700;color:#e6edf3;min-width:60px">{p["ticker"]}</span>'
+                        + _action_badge(p.get("action") or "")
+                        + _price_str + " "
+                        + _in_screener_badge(p["ticker"])
+                        + (f'<span style="color:#7d8590;font-size:11px;margin-left:auto">{p["notes"]}</span>'
+                           if p.get("notes") else "")
+                        + "</div>",
+                        unsafe_allow_html=True,
+                    )
+
+        _nl_count = len(get_newsletter_dates())
+        if _nl_count > 1:
+            st.divider()
+            st.caption(f"{_nl_count} newsletters in database")
 
 
 # ---------------------------------------------------------------------------
