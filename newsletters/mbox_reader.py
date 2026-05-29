@@ -1,11 +1,25 @@
-"""Read emails from an .mbox file exported from Gmail (Google Takeout)."""
+"""Read emails from an .mbox file or a single .eml file."""
 from __future__ import annotations
 
+import email as _email_lib
 import mailbox
 from datetime import datetime
 from email.header import decode_header as _decode_header_raw
 from email.utils import parsedate_to_datetime
 from pathlib import Path
+
+
+def read_eml_bytes(data: bytes) -> tuple:
+    """
+    Parse a single .eml file from raw bytes.
+    Returns (email_date, subject, html_body, text_body).
+    """
+    msg = _email_lib.message_from_bytes(data)
+    return (
+        _parse_date(msg.get("Date", "")),
+        _decode_str(msg.get("Subject", "")),
+        *_extract_bodies(msg),
+    )
 
 
 def iter_emails(mbox_path: str | Path):

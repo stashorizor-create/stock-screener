@@ -1086,9 +1086,31 @@ with st.sidebar:
 def _render_newsletter_page(sel_date: str | None = None):
     import plotly.graph_objects as go
 
-    _market, _picks = get_newsletter(sel_date)
-
     st.markdown("## Alex's Picks — PrimeTrading")
+
+    # ── .eml upload ────────────────────────────────────────────────────────────
+    with st.expander("📥 Add new newsletter (.eml)", expanded=False):
+        st.caption("In Gmail: open the email → ⋮ menu → Download message → drag the .eml file here.")
+        _uploaded = st.file_uploader("Drop .eml file", type=["eml"], key="eml_uploader",
+                                     label_visibility="collapsed")
+        if _uploaded is not None:
+            _file_id = f"{_uploaded.name}_{_uploaded.size}"
+            if st.session_state.get("_last_eml") != _file_id:
+                with st.spinner("Ingesting newsletter… (~10 sec)"):
+                    try:
+                        from newsletters.runner import run_eml_bytes
+                        _ok, _msg = run_eml_bytes(_uploaded.read(), dry_run=False)
+                        if _ok:
+                            st.success(f"Done — {_msg}")
+                            st.session_state["_last_eml"] = _file_id
+                            st.cache_data.clear()
+                            st.rerun()
+                        else:
+                            st.error(f"Ingestion failed: {_msg}")
+                    except Exception as _exc:
+                        st.error(f"Error: {_exc}")
+
+    _market, _picks = get_newsletter(sel_date)
 
     if _picks and _picks[0].get("_error"):
         st.error(f"DB error: {_picks[0]['_error']}")
