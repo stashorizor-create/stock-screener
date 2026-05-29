@@ -1300,8 +1300,6 @@ def _render_newsletter_page(sel_date: str | None = None):
                     _chart_options, key="wl_chart_sel",
                     format_func=lambda t: f"{t}  (score {next(r['alex_score'] for r in _rows if r['ticker']==t):.0f})",
                 )
-            else:
-                st.warning(f"No chart data loaded. Borsdata could not find OHLCV for: {', '.join(_failed) if _failed else 'any tickers'}")
                 if _sel:
                     _ohlcv_records = _wl_data[_sel]["df"]
                     _sc = _wl_data[_sel]["score"]
@@ -1390,6 +1388,8 @@ def _render_newsletter_page(sel_date: str | None = None):
                                 ("Compress",    f'<span style="color:{"#3fb950" if _s["compression"]>=15 else "#e3b341"}">{_s["compression"]:.0f}/20</span>'),
                                 ("Total",       f'<span style="font-weight:700;color:{"#3fb950" if _sc["total"]>=70 else "#e3b341"}">{_sc["total"]:.0f}/110</span>'),
                             ]), unsafe_allow_html=True)
+            else:
+                st.warning(f"No chart data loaded. Borsdata could not find OHLCV for: {', '.join(_failed) if _failed else 'any tickers'}")
 
     # ── Newsletter tab ─────────────────────────────────────────────────────────
     with _tab_nl:
