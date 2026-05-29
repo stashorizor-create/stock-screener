@@ -715,52 +715,46 @@ with st.sidebar:
 
 @st.cache_data(ttl=300, show_spinner=False)
 def get_newsletter() -> tuple[dict | None, list[dict]]:
-    """Load latest newsletter from DB using psycopg2 directly (avoids SQLAlchemy init issues)."""
+    """Load latest newsletter via Supabase REST API (same path as signal loader)."""
     try:
-        import psycopg2
-        import psycopg2.extras
-
-        db_url = ""
+        supa_url = ""
+        supa_key = ""
         try:
-            db_url = st.secrets.get("DATABASE_URL", "")
+            supa_url = st.secrets.get("SUPABASE_URL", "")
+            supa_key = (st.secrets.get("SUPABASE_KEY") or
+                        st.secrets.get("SUPABASE_SERVICE_KEY") or "")
         except Exception:
             pass
-        if not db_url:
+        if not supa_url or not supa_key:
             from config.settings import settings
-            db_url = settings.DATABASE_URL
-        if not db_url:
-            return None, [{"_error": "DATABASE_URL not configured"}]
+            supa_url = supa_url or settings.SUPABASE_URL
+            supa_key = supa_key or settings.SUPABASE_SERVICE_KEY
 
-        db_url = db_url.replace("postgres://", "postgresql://", 1).replace("postgresql://", "postgresql://", 1)
-        # psycopg2 needs postgres:// not postgresql://
-        pg_url = db_url.replace("postgresql://", "postgres://", 1)
+        if not supa_url or not supa_key:
+            return None, [{"_error": "SUPABASE_URL / SUPABASE_KEY not configured in Streamlit secrets"}]
 
-        conn = psycopg2.connect(pg_url, connect_timeout=10)
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        from supabase import create_client
+        client = create_client(supa_url, supa_key)
 
-        cur.execute("""
-            SELECT id, email_date, subject, market_stance, market_notes
-            FROM newsletter_market
-            ORDER BY email_date DESC LIMIT 1
-        """)
-        market_row = cur.fetchone()
-        if not market_row:
-            conn.close()
+        r = (client.table("newsletter_market")
+             .select("id,email_date,subject,market_stance,market_notes")
+             .order("email_date", desc=True)
+             .limit(1)
+             .execute())
+        if not r.data:
             return None, []
 
-        market = dict(market_row)
+        market = r.data[0]
         email_date = market["email_date"]
 
-        cur.execute("""
-            SELECT id, email_date, ticker, action, entry_price, stop_price,
-                   target_price, position_size_pct, notes, source_section
-            FROM newsletter_picks
-            WHERE email_date = %s
-            ORDER BY source_section, ticker
-        """, (email_date,))
-        picks = [dict(r) for r in cur.fetchall()]
-
-        conn.close()
+        r2 = (client.table("newsletter_picks")
+              .select("id,email_date,ticker,action,entry_price,stop_price,"
+                      "target_price,position_size_pct,notes,source_section")
+              .eq("email_date", email_date)
+              .order("source_section")
+              .order("ticker")
+              .execute())
+        picks = r2.data or []
         return market, picks
     except Exception as _e:
         return None, [{"_error": str(_e)}]
