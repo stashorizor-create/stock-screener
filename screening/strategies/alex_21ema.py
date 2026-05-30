@@ -1,17 +1,19 @@
 """
-Strategy: Alex's 21DMA Structure Pullback (BO21PB)
+Strategy: Alex's 21EMA Cloud Pullback
 
-Based on Alex's PrimeTrading wiki methodology:
-  Pattern 1 — price pulls back into a *rising* 21DMA cloud (EMA21 of close/high/low).
+Two patterns, one entry trigger:
 
-Criteria:
-  1. Cloud rising — EMA21(close) slope positive over 5 days
-  2. Price in zone — between ema_21_low and ema_21_high + 1×ATR (not extended, not broken)
-  3. Higher lows — recent swing lows ascending (trend intact)
-  4. Low pullback volume — down-day vol < 75% of 50d average (healthy digestion)
-  5. Compression — recent daily ranges tightening vs ATR baseline
+  Pattern 1 (P1) — Rising Pullback
+    Price was above cloud, pulled back into it. Cloud rising. Buy the dip.
 
-Entry trigger: break above ema_21_high (cloud top), or at ema_21 if already in cloud.
+  Pattern 2 (P2) — Reclaim Backtest  [highest R/R]
+    Price briefly violated below cloud, reclaimed it, now back-testing from above.
+    Trapped shorts = explosive when it works. Alex's favourite.
+
+Entry trigger (both patterns): prior day high reclaim
+    Today's close > yesterday's high while in the valid setup zone.
+    EOD signal — confirms demand on the reclaim bar.
+
 Stop: ema_21_low (cloud bottom — structural break = exit).
 """
 import pandas as pd
@@ -24,10 +26,11 @@ def detect_alex_21ema(
     slope_lookback: int = 5,
     pullback_lookback: int = 20,
     pullback_vol_threshold: float = 0.75,
+    violation_lookback: int = 15,
 ) -> dict | None:
     """
-    Detect Alex's 21DMA structure pullback.
-    Requires ema_21, ema_21_high, ema_21_low, atr_14, volume_sma_50, sma_50 columns.
+    Detect Alex's 21EMA cloud pullback (P1 or P2) with prior day high reclaim trigger.
+    Requires: ema_21, ema_21_high, ema_21_low, atr_14, volume_sma_50, sma_50 columns.
     """
     if end_idx < 50:
         return None
@@ -47,42 +50,71 @@ def detect_alex_21ema(
     if atr <= 0 or vol_sma_50 <= 0:
         return None
 
-    # ── 1. Cloud rising ──────────────────────────────────────────────────────
+    # ── 1. Cloud rising ───────────────────────────────────────────────────────
     prev_mid = df["ema_21"].iloc[end_idx - slope_lookback]
     if pd.isna(prev_mid) or ema_mid <= prev_mid:
         return None
     slope_pct = (ema_mid - prev_mid) / prev_mid * 100
 
-    # ── 2. Price in zone (not below cloud, not extended beyond 1×ATR above) ─
+    # ── 2. Price in zone (not below cloud, not extended >1×ATR above top) ────
     if close < ema_lo:
         return None
     if close > ema_hi + atr_extension_limit * atr:
         return None
 
-    # ── 3. Prior uptrend: price above 50 SMA ─────────────────────────────────
+    # ── 3. Prior uptrend: price above SMA50 ──────────────────────────────────
     sma_50 = df["sma_50"].iloc[end_idx] if "sma_50" in df.columns else None
     if sma_50 is not None and not pd.isna(sma_50) and close < sma_50:
         return None
 
-    # ── 4. Higher lows ────────────────────────────────────────────────────────
+    # ── 4. Pattern classification ─────────────────────────────────────────────
+    # P2: prior cloud violation (close < ema_lo) in the lookback window
+    lb_start = max(0, end_idx - violation_lookback)
+    prior_closes  = df["close"].iloc[lb_start : end_idx - 1]
+    prior_ema_los = df["ema_21_low"].iloc[lb_start : end_idx - 1]
+    had_violation = (prior_closes < prior_ema_los).any() if len(prior_closes) > 0 else False
+
+    # P1: was clearly above cloud in last 10 bars (pure pullback, no prior break)
+    prior_10_closes = df["close"].iloc[max(0, end_idx - 11) : end_idx - 1]
+    was_above_cloud = (prior_10_closes > ema_hi).any() if len(prior_10_closes) > 0 else False
+
+    pat2 = had_violation                   # reclaim backtest
+    pat1 = was_above_cloud and not pat2    # clean rising pullback
+
+    if not pat1 and not pat2:
+        return None
+
+    pattern = "P2" if pat2 else "P1"
+
+    # ── 5. Entry trigger: prior day high reclaim ──────────────────────────────
+    # Signal only fires on the bar where today's close reclaims yesterday's high.
+    prev_high = df["high"].iloc[end_idx - 1]
+    if pd.isna(prev_high) or close <= prev_high:
+        return None
+
+    # ── 6. Higher lows ────────────────────────────────────────────────────────
     hl_score, n_higher_lows = _check_higher_lows(df, end_idx, pullback_lookback)
     if n_higher_lows < 0:
         return None
 
-    # ── 5. Low-volume pullback ────────────────────────────────────────────────
+    # ── 7. Low-volume pullback ────────────────────────────────────────────────
     vol_score = _pullback_volume_score(df, end_idx, pullback_lookback, vol_sma_50, pullback_vol_threshold)
 
-    # ── 6. Compression ────────────────────────────────────────────────────────
-    recent_ranges = (df["high"].iloc[end_idx - 5:end_idx + 1] - df["low"].iloc[end_idx - 5:end_idx + 1]).mean()
+    # ── 8. Compression ────────────────────────────────────────────────────────
+    recent_ranges  = (df["high"].iloc[end_idx - 5 : end_idx + 1]
+                      - df["low"].iloc[end_idx - 5 : end_idx + 1]).mean()
     compression_ratio = recent_ranges / atr
     compression_score = max(0.0, min(15.0, (1.0 - compression_ratio) * 30 + 15))
 
-    quality = _quality_score(slope_pct, close, ema_lo, ema_hi, atr, hl_score, vol_score, compression_score)
-
-    entry_trigger = ema_hi if close <= ema_hi else close
+    quality = _quality_score(
+        slope_pct, close, ema_lo, ema_hi, atr,
+        hl_score, vol_score, compression_score,
+        pattern_bonus=10.0 if pat2 else 0.0,
+    )
 
     return {
         "strategy":          "alex_21ema",
+        "pattern":           pattern,
         "ema_21_mid":        round(ema_mid, 2),
         "ema_21_high":       round(ema_hi, 2),
         "ema_21_low":        round(ema_lo, 2),
@@ -91,14 +123,14 @@ def detect_alex_21ema(
         "price_in_cloud":    close <= ema_hi,
         "n_higher_lows":     n_higher_lows,
         "compression_ratio": round(compression_ratio, 2),
-        "entry_trigger":     round(entry_trigger, 2),
+        "entry_trigger":     round(close, 2),       # triggered at today's close
         "stop_price":        round(ema_lo, 2),
         "quality_score":     quality,
     }
 
 
 def _check_higher_lows(df: pd.DataFrame, end_idx: int, lookback: int) -> tuple[float, int]:
-    lows = df["low"].iloc[max(0, end_idx - lookback):end_idx + 1].values
+    lows = df["low"].iloc[max(0, end_idx - lookback) : end_idx + 1].values
     swing_lows = [
         lows[i] for i in range(1, len(lows) - 1)
         if lows[i] <= lows[i - 1] and lows[i] <= lows[i + 1]
@@ -117,7 +149,7 @@ def _check_higher_lows(df: pd.DataFrame, end_idx: int, lookback: int) -> tuple[f
 def _pullback_volume_score(
     df: pd.DataFrame, end_idx: int, lookback: int, vol_sma_50: float, threshold: float
 ) -> float:
-    window = df.iloc[max(0, end_idx - lookback):end_idx + 1]
+    window    = df.iloc[max(0, end_idx - lookback) : end_idx + 1]
     down_days = window[window["close"] < window["close"].shift(1)]
     if down_days.empty or vol_sma_50 <= 0:
         return 10.0
@@ -140,13 +172,18 @@ def _quality_score(
     hl_score: float,
     vol_score: float,
     compression_score: float,
+    pattern_bonus: float = 0.0,
 ) -> float:
     # Cloud slope strength (0-25)
     slope_score = min(25.0, slope_pct * 5)
 
-    # Proximity: in cloud + close to ema_lo = best (0-25)
-    cloud_span = max(ema_hi - ema_lo, 0.001) + atr
+    # Proximity: deep in cloud near ema_lo = best (0-25)
+    cloud_span    = max(ema_hi - ema_lo, 0.001) + atr
     dist_above_lo = max(0.0, close - ema_lo)
     proximity_score = max(0.0, min(25.0, (1.0 - dist_above_lo / cloud_span) * 25))
 
-    return round(slope_score + proximity_score + hl_score + vol_score + compression_score, 1)
+    # P2 gets a bonus for higher R/R (trapped shorts, explosive potential)
+    return round(
+        min(100.0, slope_score + proximity_score + hl_score + vol_score + compression_score + pattern_bonus),
+        1,
+    )
