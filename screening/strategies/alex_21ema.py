@@ -75,8 +75,11 @@ def detect_alex_21ema(
     had_violation = (prior_closes < prior_ema_los).any() if len(prior_closes) > 0 else False
 
     # P1: was clearly above cloud in last 10 bars (pure pullback, no prior break)
-    prior_10_closes = df["close"].iloc[max(0, end_idx - 11) : end_idx - 1]
-    was_above_cloud = (prior_10_closes > ema_hi).any() if len(prior_10_closes) > 0 else False
+    # Compare each prior close against the ema_hi value at THAT bar, not today's
+    _p1_start = max(0, end_idx - 11)
+    prior_10_closes  = df["close"].iloc[_p1_start : end_idx - 1]
+    prior_10_ema_hi  = df["ema_21_high"].iloc[_p1_start : end_idx - 1]
+    was_above_cloud  = (prior_10_closes > prior_10_ema_hi).any() if len(prior_10_closes) > 0 else False
 
     pat2 = had_violation                   # reclaim backtest
     pat1 = was_above_cloud and not pat2    # clean rising pullback
