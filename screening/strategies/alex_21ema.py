@@ -11,8 +11,8 @@ Two patterns, one entry trigger:
     Trapped shorts = explosive when it works. Alex's favourite.
 
 Entry trigger (both patterns): prior day high reclaim
-    Today's close > yesterday's high while in the valid setup zone.
-    EOD signal — confirms demand on the reclaim bar.
+    entry_trigger = yesterday's high. Set an intraday alert at that level.
+    Buy when price crosses it during the trading day — do NOT wait for EOD close.
 
 Stop: ema_21_low (cloud bottom — structural break = exit).
 """
@@ -86,10 +86,10 @@ def detect_alex_21ema(
 
     pattern = "P2" if pat2 else "P1"
 
-    # ── 5. Entry trigger: prior day high reclaim ──────────────────────────────
-    # Signal only fires on the bar where today's close reclaims yesterday's high.
+    # ── 5. Entry trigger level ────────────────────────────────────────────────
+    # Set a price alert at prev_high. Buy intraday when price crosses it.
     prev_high = df["high"].iloc[end_idx - 1]
-    if pd.isna(prev_high) or close <= prev_high:
+    if pd.isna(prev_high):
         return None
 
     # ── 6. Higher lows ────────────────────────────────────────────────────────
@@ -123,7 +123,7 @@ def detect_alex_21ema(
         "price_in_cloud":    close <= ema_hi,
         "n_higher_lows":     n_higher_lows,
         "compression_ratio": round(compression_ratio, 2),
-        "entry_trigger":     round(close, 2),       # triggered at today's close
+        "entry_trigger":     round(prev_high, 2),    # break above this level intraday
         "stop_price":        round(ema_lo, 2),
         "quality_score":     quality,
     }
