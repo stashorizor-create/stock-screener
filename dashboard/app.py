@@ -855,7 +855,7 @@ def get_track_record() -> dict:
 
 @st.cache_data(ttl=600, show_spinner=False)
 def get_watchlist_tickers(email_date: str) -> list[dict]:
-    """Get watchlist tickers (focus_list, ep_list, stalklist, scan_21dma) for a newsletter date."""
+    """Get watchlist tickers (scan_21dma, focus_list, stalklist) for a newsletter date."""
     client, err = _supa_client()
     if err or client is None:
         return []
@@ -863,40 +863,17 @@ def get_watchlist_tickers(email_date: str) -> list[dict]:
         r = (client.table("newsletter_picks")
              .select("ticker,source_section,action")
              .eq("email_date", email_date)
-             .in_("source_section", ["focus_list", "ep_list", "stalklist", "scan_21dma"])
+             .in_("source_section", ["scan_21dma", "focus_list", "stalklist"])
              .execute())
         picks = r.data or []
         # Deduplicate by ticker, keeping highest-priority section
-        priority = {"focus_list": 0, "ep_list": 1, "stalklist": 2, "scan_21dma": 3}
+        priority = {"scan_21dma": 0, "focus_list": 1, "stalklist": 2}
         seen: dict[str, dict] = {}
         for p in picks:
             t = p["ticker"]
             if t not in seen or priority.get(p["source_section"], 9) < priority.get(seen[t]["source_section"], 9):
                 seen[t] = p
         return list(seen.values())
-    except Exception:
-        return []
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def get_all_newsletter_tickers() -> list[dict]:
-    """All unique tickers ever mentioned in Alex's watchlist sections across all newsletter dates."""
-    client, err = _supa_client()
-    if err or client is None:
-        return []
-    try:
-        r = (client.table("newsletter_picks")
-             .select("ticker,source_section")
-             .in_("source_section", ["focus_list", "ep_list", "stalklist", "scan_21dma"])
-             .execute())
-        picks = r.data or []
-        priority = {"focus_list": 0, "ep_list": 1, "stalklist": 2, "scan_21dma": 3}
-        seen: dict[str, dict] = {}
-        for p in picks:
-            t = p["ticker"]
-            if t not in seen or priority.get(p["source_section"], 9) < priority.get(seen[t]["source_section"], 9):
-                seen[t] = p
-        return sorted(seen.values(), key=lambda x: x["ticker"])
     except Exception:
         return []
 
@@ -1392,7 +1369,7 @@ def _render_newsletter_page(sel_date: str | None = None):
         _wl_picks = get_watchlist_tickers(_date_for_watch) if _date_for_watch else []
 
         if not _wl_picks:
-            st.info("No watchlist entries (focus_list / EP list / stalk list) in this newsletter.")
+            st.info("No watchlist entries for this newsletter — upload the latest newsletter to populate.")
         else:
             _wl_tickers = tuple(sorted(p["ticker"] for p in _wl_picks))
             _wl_section = {p["ticker"]: p["source_section"] for p in _wl_picks}
@@ -1403,50 +1380,57 @@ def _render_newsletter_page(sel_date: str | None = None):
             # Screener lookup: {symbol → composite_score}
             _screener_map = {s["symbol"].upper(): s["composite_score"] for s in ALL_SIGNALS}
 
-            # Build scored rows
-            _SECTION_SHORT = {
-                "focus_list": "FOCUS", "ep_list": "EP",
-                "stalklist": "STALK", "scan_21dma": "21D",
+            _SECTION_ORDER = ["scan_21dma", "focus_list", "stalklist"]
+            _SECTION_TITLE = {
+                "scan_21dma": "21EMA Zone — Top Setups",
+                "focus_list": "Focus List — Top Ideas",
+                "stalklist":  "Stalk List — Liquid Leaders",
             }
             _SECTION_COLOR = {
-                "focus_list": "#388bfd", "ep_list": "#a371f7",
-                "stalklist":  "#58a6ff", "scan_21dma": "#e3b341",
+                "scan_21dma": "#e3b341",
+                "focus_list": "#388bfd",
+                "stalklist":  "#58a6ff",
             }
 
-            _rows = []
+            # Build scored rows grouped by section
+            _grouped: dict[str, list] = {s: [] for s in _SECTION_ORDER}
             for tk in _wl_tickers:
-                d    = _wl_data.get(tk, {})
-                sc   = d.get("score", {})
-                _rows.append({
-                    "ticker":      tk,
-                    "section":     _wl_section.get(tk, ""),
-                    "alex_score":  sc.get("total", 0),
-                    "score_data":  sc,
-                    "in_screener": tk in _screener_map,
-                    "comp_score":  _screener_map.get(tk),
-                    "has_data":    d.get("df") is not None,
-                    "error":       d.get("error"),
-                })
-            _rows.sort(key=lambda r: r["alex_score"], reverse=True)
+                d   = _wl_data.get(tk, {})
+                sc  = d.get("score", {})
+                sec = _wl_section.get(tk, "")
+                if sec in _grouped:
+                    _grouped[sec].append({
+                        "ticker":      tk,
+                        "section":     sec,
+                        "alex_score":  sc.get("total", 0),
+                        "score_data":  sc,
+                        "in_screener": tk in _screener_map,
+                        "comp_score":  _screener_map.get(tk),
+                        "has_data":    d.get("df") is not None,
+                    })
+            for sec in _SECTION_ORDER:
+                _grouped[sec].sort(key=lambda r: r["alex_score"], reverse=True)
 
-            # Header + TradingView export
-            _all_nl = get_all_newsletter_tickers()
+            _all_rows = [r for sec in _SECTION_ORDER for r in _grouped[sec]]
+            _total = len(_all_rows)
+
+            # Header + TradingView export (current newsletter, section order)
             _scrn_exch_map = {s["symbol"].upper(): s.get("exchange", "") for s in ALL_SIGNALS}
             _nl_tv_lines: list[str] = []
-            for _p in _all_nl:
-                _t = _p["ticker"].upper()
-                _exch = _scrn_exch_map.get(_t, "")
-                _tv_exch = _TV_EXCH.get(_exch, "")
-                _nl_tv_lines.append(f"{_tv_exch}:{_t}" if _tv_exch else _t)
+            for sec in _SECTION_ORDER:
+                for row in _grouped[sec]:
+                    _t = row["ticker"].upper()
+                    _exch = _scrn_exch_map.get(_t, "")
+                    _tv_exch = _TV_EXCH.get(_exch, "")
+                    _nl_tv_lines.append(f"{_tv_exch}:{_t}" if _tv_exch else _t)
 
             _hdr_col, _btn_col = st.columns([3, 1])
             with _hdr_col:
                 st.markdown(
-                    f'<div style="display:flex;justify-content:space-between;'
-                    f'align-items:center;margin-bottom:6px">'
-                    f'<span style="color:#7d8590;font-size:11px;text-transform:uppercase;'
-                    f'letter-spacing:0.6px">{len(_rows)} stocks · {_date_for_watch}</span>'
-                    f'<span style="color:#7d8590;font-size:11px">21D score = cloud rising · in zone · higher lows · low vol · compression</span>'
+                    f'<div style="color:#7d8590;font-size:11px;text-transform:uppercase;'
+                    f'letter-spacing:0.6px;margin-bottom:6px">'
+                    f'{_total} stocks · {_date_for_watch} &nbsp;·&nbsp; '
+                    f'<span style="text-transform:none">21D score = cloud rising · in zone · higher lows · low vol · compression</span>'
                     f'</div>',
                     unsafe_allow_html=True,
                 )
@@ -1455,86 +1439,94 @@ def _render_newsletter_page(sel_date: str | None = None):
                     st.download_button(
                         f"📥 TradingView ({len(_nl_tv_lines)})",
                         data="\n".join(_nl_tv_lines),
-                        file_name="alex_watchlist_all.txt",
+                        file_name=f"alex_watchlist_{_date_for_watch}.txt",
                         mime="text/plain",
                         use_container_width=True,
-                        help="All tickers Alex has ever listed across all newsletters · Import in TradingView: Watchlists → ··· → Import list",
+                        help="Current newsletter watchlist in section order · Import in TradingView: Watchlists → ··· → Import list",
                     )
 
-            # Stock list
-            for row in _rows:
-                tk   = row["ticker"]
-                sc   = row["score_data"]
-                alx  = row["alex_score"]
-                sec  = row["section"]
-                sect_label = _SECTION_SHORT.get(sec, sec[:4].upper())
-                sect_color = _SECTION_COLOR.get(sec, "#7d8590")
-                alx_color  = "#3fb950" if alx >= 70 else ("#e3b341" if alx >= 45 else "#f85149")
+            # Stock list — grouped by section
+            def _dot(sc, val, key=None):
+                if key and sc.get("scores"):
+                    s = sc["scores"].get(key, 0)
+                    c = "#3fb950" if s >= 15 else ("#e3b341" if s >= 8 else "#484f58")
+                elif val is True:
+                    c = "#3fb950"
+                elif val is False:
+                    c = "#f85149"
+                else:
+                    c = "#e3b341"
+                return f'<span style="color:{c};font-size:14px">●</span>'
 
-                def _dot(val, key=None):
-                    if key and sc.get("scores"):
-                        s = sc["scores"].get(key, 0)
-                        c = "#3fb950" if s >= 15 else ("#e3b341" if s >= 8 else "#484f58")
-                    elif val is True:
-                        c = "#3fb950"
-                    elif val is False:
-                        c = "#f85149"
-                    else:
-                        c = "#e3b341"
-                    return f'<span style="color:{c};font-size:14px">●</span>'
-
-                _criteria = (
-                    _dot(sc.get("rising"), "rising")
-                    + _dot(sc.get("in_zone"), "proximity")
-                    + _dot(sc.get("higher_lows"), "higher_lows")
-                    + _dot(sc.get("vol_ratio", 1.0) is not None and (sc.get("vol_ratio") or 1.0) < 0.75, "volume")
-                    + _dot(sc.get("comp_ratio", 1.0) is not None and (sc.get("comp_ratio") or 1.0) < 0.85, "compression")
-                )
-
-                _comp_badge = ""
-                if row["in_screener"] and row["comp_score"] is not None:
-                    _cc = "#3fb950" if row["comp_score"] >= 75 else ("#e3b341" if row["comp_score"] >= 60 else "#f85149")
-                    _comp_badge = (f'<span style="font-size:10px;font-weight:700;color:{_cc};'
-                                   f'background:{_cc}22;border-radius:4px;padding:2px 6px;margin-left:4px">'
-                                   f'screener {row["comp_score"]:.0f}</span>')
-                elif not row["in_screener"]:
-                    _comp_badge = ('<span style="font-size:10px;font-weight:700;color:#a371f7;'
-                                   'background:#a371f722;border-radius:4px;padding:2px 6px;margin-left:4px">'
-                                   '⚡ Alex only</span>')
-
-                _lvls = ""
-                if sc.get("entry"):
-                    _lvls = (f'<span style="color:#8b949e;font-size:11px;margin-left:8px">'
-                             f'entry ${sc["entry"]:.2f} · stop ${sc["stop"]:.2f}</span>')
-
+            for sec in _SECTION_ORDER:
+                sec_rows = _grouped[sec]
+                if not sec_rows:
+                    continue
+                sec_color = _SECTION_COLOR[sec]
+                sec_title = _SECTION_TITLE[sec]
                 st.markdown(
-                    f'<div style="display:flex;align-items:center;gap:6px;'
-                    f'padding:6px 8px;background:#0d1117;border-radius:6px;'
-                    f'border:1px solid #21262d;margin-bottom:3px">'
-                    f'<span style="font-weight:700;color:#e6edf3;min-width:52px">{tk}</span>'
-                    f'<span style="font-size:10px;font-weight:700;color:{sect_color};'
-                    f'background:{sect_color}22;border-radius:4px;padding:2px 5px">{sect_label}</span>'
-                    + _comp_badge
-                    + f'<span style="flex:1"></span>'
-                    + _criteria
-                    + f'<span style="color:{alx_color};font-weight:700;font-size:13px;'
-                    f'min-width:28px;text-align:right">{alx:.0f}</span>'
-                    + _lvls
-                    + f'</div>',
+                    f'<div style="margin:12px 0 4px;border-left:3px solid {sec_color};padding-left:8px">'
+                    f'<span style="color:{sec_color};font-size:11px;font-weight:700;'
+                    f'text-transform:uppercase;letter-spacing:0.6px">'
+                    f'{sec_title} &nbsp;·&nbsp; {len(sec_rows)}</span></div>',
                     unsafe_allow_html=True,
                 )
+                for row in sec_rows:
+                    tk  = row["ticker"]
+                    sc  = row["score_data"]
+                    alx = row["alex_score"]
+                    alx_color = "#3fb950" if alx >= 70 else ("#e3b341" if alx >= 45 else "#f85149")
+
+                    _criteria = (
+                        _dot(sc, sc.get("rising"), "rising")
+                        + _dot(sc, sc.get("in_zone"), "proximity")
+                        + _dot(sc, sc.get("higher_lows"), "higher_lows")
+                        + _dot(sc, (sc.get("vol_ratio") or 1.0) < 0.75, "volume")
+                        + _dot(sc, (sc.get("comp_ratio") or 1.0) < 0.85, "compression")
+                    )
+
+                    _comp_badge = ""
+                    if row["in_screener"] and row["comp_score"] is not None:
+                        _cc = "#3fb950" if row["comp_score"] >= 75 else ("#e3b341" if row["comp_score"] >= 60 else "#f85149")
+                        _comp_badge = (f'<span style="font-size:10px;font-weight:700;color:{_cc};'
+                                       f'background:{_cc}22;border-radius:4px;padding:2px 6px;margin-left:4px">'
+                                       f'screener {row["comp_score"]:.0f}</span>')
+                    else:
+                        _comp_badge = ('<span style="font-size:10px;font-weight:700;color:#a371f7;'
+                                       'background:#a371f722;border-radius:4px;padding:2px 6px;margin-left:4px">'
+                                       '⚡ Alex only</span>')
+
+                    _lvls = ""
+                    if sc.get("entry"):
+                        _lvls = (f'<span style="color:#8b949e;font-size:11px;margin-left:8px">'
+                                 f'entry ${sc["entry"]:.2f} · stop ${sc["stop"]:.2f}</span>')
+
+                    st.markdown(
+                        f'<div style="display:flex;align-items:center;gap:6px;'
+                        f'padding:6px 8px;background:#0d1117;border-radius:6px;'
+                        f'border:1px solid #21262d;margin-bottom:3px">'
+                        f'<span style="font-weight:700;color:#e6edf3;min-width:52px">{tk}</span>'
+                        + _comp_badge
+                        + f'<span style="flex:1"></span>'
+                        + _criteria
+                        + f'<span style="color:{alx_color};font-weight:700;font-size:13px;'
+                        f'min-width:28px;text-align:right">{alx:.0f}</span>'
+                        + _lvls
+                        + f'</div>',
+                        unsafe_allow_html=True,
+                    )
 
             # Cloud chart for selected ticker
             st.markdown("---")
-            _chart_options = [tk for tk in [r["ticker"] for r in _rows] if _wl_data.get(tk, {}).get("df")]
-            _failed = [r["ticker"] for r in _rows if not _wl_data.get(r["ticker"], {}).get("df")]
+            _chart_options = [tk for tk in [r["ticker"] for r in _all_rows] if _wl_data.get(tk, {}).get("df")]
+            _failed = [r["ticker"] for r in _all_rows if not _wl_data.get(r["ticker"], {}).get("df")]
             if _chart_options:
                 if _failed:
-                    st.caption(f"Charts loaded for {len(_chart_options)}/{len(_rows)} tickers · no Borsdata data for: {', '.join(_failed)}")
+                    st.caption(f"Charts loaded for {len(_chart_options)}/{len(_all_rows)} tickers · no Borsdata data for: {', '.join(_failed)}")
                 _sel = st.selectbox(
                     "Select ticker to view cloud chart",
                     _chart_options, key="wl_chart_sel",
-                    format_func=lambda t: f"{t}  (score {next(r['alex_score'] for r in _rows if r['ticker']==t):.0f})",
+                    format_func=lambda t: f"{t}  (score {next(r['alex_score'] for r in _all_rows if r['ticker']==t):.0f})",
                 )
                 if _sel:
                     _ohlcv_records = _wl_data[_sel]["df"]
