@@ -480,6 +480,81 @@ def expand_to_rows(signals: list[dict]) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Strategy reference material — injected into chat system prompt
+# ---------------------------------------------------------------------------
+
+_STRATEGY_REFS: dict[str, str] = {
+    "alex_21ema": (
+        "--- PrimeTrading Wiki Reference (traderslab.gitbook.io/primetrading) ---\n"
+        "ZONE: 21EMA cloud = EMA21(lows) + EMA21(highs) + EMA21(close). "
+        "Cloud low = structural stop; cloud high = upper validity boundary. "
+        "Only trade within 1×ATR of the zone.\n\n"
+        "PATTERNS:\n"
+        "- P1 — Pullback Into Rising Structure: Confirmed uptrend, price pulls back into rising cloud. "
+        "Clean bounce or retest forming higher low. Highest historical win rate. Most aggressive positioning.\n"
+        "- P2 — Reclaim & Backtest: Price reclaims cloud after a correction, retests forming a 'structure higher low.' "
+        "Downtrend losing control. Early positioning, well-defined risk. Alex's favourite (trapped shorts).\n"
+        "- P3 — Reject & Higher Low: Price fails to reclaim cloud but forms higher low underneath. "
+        "Cautious pilot positions only if leadership confirms.\n"
+        "- P4 — Reject & Lower Low: Downtrend in full control. Avoid.\n\n"
+        "ENTRY TYPES:\n"
+        "- Weakness into structure (R2G): Buy weakness directly against cloud. Best R/R. "
+        "Risk 0.25% per trade. Powerful on red-to-green opens in strong markets.\n"
+        "- Strength confirmation: Daily reversal / prior day high reclaim, cloud-high reclaim, "
+        "DTL or base breakout. Higher conviction, reduced R/R. Risk 0.5% per trade.\n"
+        "- Constraint: Do NOT engage if price is more than 1×ATR above cloud high.\n\n"
+        "STOP: 21EMA low band (cloud bottom). Daily close below = exit. "
+        "Soft stops preferred over hard orders.\n\n"
+        "POSITION MANAGEMENT: After 2R trim (sell ⅓), trail remaining ⅔ with "
+        "daily close below cloud as stop — allows multi-week trend capture.\n"
+        "---"
+    ),
+    "vcp": (
+        "--- Reference: Mark Minervini — 'Trade Like a Stock Market Wizard' ---\n"
+        "VCP (Volatility Contraction Pattern): Series of price contractions getting tighter in range "
+        "and lower in volume, coiling into a pivot buy point. Entry at pivot breakout on volume surge "
+        "≥40-50% above average. Stop below the lowest low of the tightest contraction.\n"
+        "---"
+    ),
+    "qullamaggie": (
+        "--- Reference: Kristjan Kullamaggie momentum strategy ---\n"
+        "Episodic pivot: stock surges 30%+ on a catalyst, bases 10-30 days on low volume drying up, "
+        "then breaks out above base high. Entry at base breakout. Stop below base low. "
+        "Highest win rate when base is tight and volume disappears completely near the pivot.\n"
+        "---"
+    ),
+    "ema_pullback": (
+        "--- Reference: 5 EMA Pullback (momentum continuation) ---\n"
+        "After a strong surge (≥7%, 3+ days, volume ≥1.4× average), stock consolidates with an inside day "
+        "at or near the 5 EMA. Entry above inside day high. Stop below inside day low. "
+        "Ideally within 20 days of the surge.\n"
+        "---"
+    ),
+    "sma_inside_day": (
+        "--- Reference: SMA Inside Day (deeper momentum continuation) ---\n"
+        "Same surge prerequisite as 5 EMA Pullback but price has pulled back deeper to the 20 or 50 SMA. "
+        "Inside day forms within 3 sessions of the SMA touch. Entry above inside day high. "
+        "Stop below inside day low or the SMA.\n"
+        "---"
+    ),
+    "gap_up": (
+        "--- Reference: IBD Buyable Gap Up ---\n"
+        "Strong gap open above prior resistance on heavy volume (≥150% of 10-day average), "
+        "closing in upper 50% of the day's range. Entry anywhere in the gap range on the gap day. "
+        "Stop at gap day low.\n"
+        "---"
+    ),
+    "pocket_pivot": (
+        "--- Reference: Chris Kacher & Gil Morales — 'Trade Like an O'Neil Disciple' ---\n"
+        "Pocket Pivot: volume on an up day exceeds the maximum volume on any down day in the prior "
+        "10 sessions, while price is near a key moving average (10 or 21 SMA/EMA). "
+        "Signals institutional accumulation before a visible breakout.\n"
+        "---"
+    ),
+}
+
+
 # Claude chat helper — defined here so it's available throughout the script
 # ---------------------------------------------------------------------------
 
@@ -542,6 +617,9 @@ def _call_claude_chat(
         "- Recent news:\n" + "\n".join(f"  • {h}" for h in _sys_news[:5]) + "\n"
     ) if _sys_news else ""
 
+    _refs = "\n\n".join(_STRATEGY_REFS[s] for s in strats if s in _STRATEGY_REFS)
+    _refs_block = f"\nStrategy reference material:\n{_refs}\n" if _refs else ""
+
     system = (
         f"You are a swing trading analyst helping review {sig['symbol']} "
         f"({sig.get('company_name', sig['symbol'])}, {sig.get('exchange', '?')}).\n"
@@ -552,8 +630,11 @@ def _call_claude_chat(
         f"Target: {sig.get('target_price', '?')}\n"
         f"- RS Rank: {sig.get('rs_rank', '?')}th percentile\n"
         + _theme_line + _fund_line + _news_line
-        + f"The chart image may be attached. Discuss macro context, news, and fundamentals alongside technicals. "
-        f"Be concise and actionable for a swing trader."
+        + _refs_block
+        + "The chart image may be attached. When discussing entries, stops, or pattern behaviour, "
+        "cite the relevant strategy reference above (including the wiki URL for alex_21ema). "
+        "Discuss macro context, news, and fundamentals alongside technicals. "
+        "Be concise and actionable for a swing trader."
     )
 
     # Reconstruct message list — chart block attaches to the very first user message
