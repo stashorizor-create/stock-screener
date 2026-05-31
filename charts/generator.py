@@ -28,6 +28,7 @@ _STRATEGY_LABELS = {
     "ema_pullback": "5 EMA Pullback",
     "gap_up":       "Buyable Gap Up",
     "pocket_pivot": "Pocket Pivot",
+    "alex_21ema":   "Alex 21EMA Cloud",
 }
 
 # MA spec tuples: (column, color, line_width, linestyle, legend_label)
@@ -69,6 +70,16 @@ _LAYOUTS: dict[str, dict] = {
             ("sma_50", "#4488FF", 1.4, "-", "SMA 50"),
             ("sma_10", "#FFFFFF", 1.1, "-", "SMA 10"),
             ("ema_21", "#00CC44", 1.1, "-", "EMA 21"),
+        ],
+    },
+    "alex_21ema": {
+        "lookback_days": 60,
+        "ma_specs": [
+            ("ema_21",      "#00DD66", 1.3, "-",  "EMA 21"),
+            ("ema_21_high", "#4499FF", 0.8, "--", "EMA Hi"),
+            ("ema_21_low",  "#4499FF", 0.8, "--", "EMA Lo"),
+            ("sma_150",     "#FF9900", 1.4, "-",  "SMA 150"),
+            ("sma_200",     "#FF4444", 1.4, "-",  "SMA 200"),
         ],
     },
 }
@@ -284,6 +295,8 @@ def _annotate(ax_price, ax_vol, sig: dict, strategy: str, plot_df: pd.DataFrame)
         _ann_gap_up(ax_price, sig, n)
     elif strategy == "pocket_pivot":
         _ann_pocket_pivot(ax_price, ax_vol, sig, n, plot_df)
+    elif strategy == "alex_21ema":
+        _ann_alex_21ema(ax_price, sig, n, plot_df)
 
 
 def _ann_vcp(ax, sig: dict, n: int) -> None:
@@ -365,6 +378,31 @@ def _ann_pocket_pivot(ax_price, ax_vol, sig: dict, n: int, plot_df: pd.DataFrame
     ref_sma = "SMA 10" if sig.get("reference_sma") == "sma_10" else "EMA 21"
     cross_txt = "crosses" if sig.get("crosses_over") else "extends from"
     _info_box(ax_price, f"Vol ×{vol_ratio:.1f} vs ↓days · {cross_txt} {ref_sma}")
+
+
+def _ann_alex_21ema(ax, sig: dict, n: int, plot_df: pd.DataFrame) -> None:
+    # Shade the cloud band
+    if "ema_21_high" in plot_df.columns and "ema_21_low" in plot_df.columns:
+        x = range(len(plot_df))
+        ax.fill_between(
+            x,
+            plot_df["ema_21_low"].values,
+            plot_df["ema_21_high"].values,
+            alpha=0.18,
+            color="#4499FF",
+        )
+
+    entry = sig.get("entry_trigger")
+    stop = sig.get("stop_price")
+    if entry:
+        _hline(ax, entry, "#00FF88", "Entry ↑", n)
+    if stop:
+        _hline(ax, stop, "#FF4444", "Stop", n)
+
+    pattern = sig.get("pattern", "P1")
+    slope = sig.get("slope_5d_pct", 0)
+    quality = sig.get("quality_score", 0)
+    _info_box(ax, f"{pattern} · Slope {slope:.1f}% · Score {quality:.0f}")
 
 
 # ---------------------------------------------------------------------------
