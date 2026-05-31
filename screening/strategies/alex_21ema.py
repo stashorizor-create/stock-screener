@@ -26,7 +26,7 @@ def detect_alex_21ema(
     slope_lookback: int = 5,
     pullback_lookback: int = 20,
     pullback_vol_threshold: float = 0.75,
-    violation_lookback: int = 15,
+    violation_lookback: int = 10,
 ) -> dict | None:
     """
     Detect Alex's 21EMA cloud pullback (P1 or P2) with prior day high reclaim trigger.
@@ -93,6 +93,11 @@ def detect_alex_21ema(
     # Set a price alert at prev_high. Buy intraday when price crosses it.
     prev_high = df["high"].iloc[end_idx - 1]
     if pd.isna(prev_high):
+        return None
+    # Entry trigger must itself be within the buyable zone — if yesterday's high
+    # is already >1×ATR above the cloud, buying it means entering extended, not
+    # into structure. Reject the signal; wait for a closer prior-day high.
+    if prev_high > ema_hi + atr_extension_limit * atr:
         return None
 
     # ── 6. Higher lows ────────────────────────────────────────────────────────
