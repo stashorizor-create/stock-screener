@@ -879,6 +879,29 @@ def get_watchlist_tickers(email_date: str) -> list[dict]:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
+def get_all_newsletter_tickers() -> list[dict]:
+    """All unique tickers ever mentioned in Alex's watchlist sections across all newsletter dates."""
+    client, err = _supa_client()
+    if err or client is None:
+        return []
+    try:
+        r = (client.table("newsletter_picks")
+             .select("ticker,source_section")
+             .in_("source_section", ["focus_list", "ep_list", "stalklist", "scan_21dma"])
+             .execute())
+        picks = r.data or []
+        priority = {"focus_list": 0, "ep_list": 1, "stalklist": 2, "scan_21dma": 3}
+        seen: dict[str, dict] = {}
+        for p in picks:
+            t = p["ticker"]
+            if t not in seen or priority.get(p["source_section"], 9) < priority.get(seen[t]["source_section"], 9):
+                seen[t] = p
+        return sorted(seen.values(), key=lambda x: x["ticker"])
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_pick_entry_date(ticker: str) -> str | None:
     """Return the earliest newsletter date this ticker appeared in portfolio_table with an entry price."""
     client, err = _supa_client()
@@ -1406,16 +1429,37 @@ def _render_newsletter_page(sel_date: str | None = None):
                 })
             _rows.sort(key=lambda r: r["alex_score"], reverse=True)
 
-            # Header
-            st.markdown(
-                f'<div style="display:flex;justify-content:space-between;'
-                f'align-items:center;margin-bottom:6px">'
-                f'<span style="color:#7d8590;font-size:11px;text-transform:uppercase;'
-                f'letter-spacing:0.6px">{len(_rows)} stocks · {_date_for_watch}</span>'
-                f'<span style="color:#7d8590;font-size:11px">21D score = cloud rising · in zone · higher lows · low vol · compression</span>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
+            # Header + TradingView export
+            _all_nl = get_all_newsletter_tickers()
+            _scrn_exch_map = {s["symbol"].upper(): s.get("exchange", "") for s in ALL_SIGNALS}
+            _nl_tv_lines: list[str] = []
+            for _p in _all_nl:
+                _t = _p["ticker"].upper()
+                _exch = _scrn_exch_map.get(_t, "")
+                _tv_exch = _TV_EXCH.get(_exch, "")
+                _nl_tv_lines.append(f"{_tv_exch}:{_t}" if _tv_exch else _t)
+
+            _hdr_col, _btn_col = st.columns([3, 1])
+            with _hdr_col:
+                st.markdown(
+                    f'<div style="display:flex;justify-content:space-between;'
+                    f'align-items:center;margin-bottom:6px">'
+                    f'<span style="color:#7d8590;font-size:11px;text-transform:uppercase;'
+                    f'letter-spacing:0.6px">{len(_rows)} stocks · {_date_for_watch}</span>'
+                    f'<span style="color:#7d8590;font-size:11px">21D score = cloud rising · in zone · higher lows · low vol · compression</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+            with _btn_col:
+                if _nl_tv_lines:
+                    st.download_button(
+                        f"📥 TradingView ({len(_nl_tv_lines)})",
+                        data="\n".join(_nl_tv_lines),
+                        file_name="alex_watchlist_all.txt",
+                        mime="text/plain",
+                        use_container_width=True,
+                        help="All tickers Alex has ever listed across all newsletters · Import in TradingView: Watchlists → ··· → Import list",
+                    )
 
             # Stock list
             for row in _rows:
