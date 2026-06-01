@@ -64,18 +64,22 @@ CACHE_DIR   = OUTPUT_DIR / "data_cache"
 # ---------------------------------------------------------------------------
 @dataclass
 class Trade:
-    ticker:          str
-    entry_date:      date
-    entry_price:     float
-    stop_price:      float
-    shares:          float
-    base_days:       int
-    prior_move_pct:  float
-    quality_score:   float
-    exit_date:       date  | None = None
-    exit_price:      float | None = None
-    exit_reason:     str   | None = None  # "stop" | "ema5" | "open_positions"
-    pending_ema_exit: bool = False
+    ticker:           str
+    entry_date:       date
+    entry_price:      float
+    stop_price:       float    # active stop — moves to entry_price after 2R hit
+    initial_stop:     float    # original stop, fixed for R calculations
+    shares:           float
+    base_days:        int
+    prior_move_pct:   float
+    quality_score:    float
+    exit_date:        date  | None = None
+    exit_price:       float | None = None
+    exit_reason:      str   | None = None
+    stop_moved_to_be: bool = False   # True once stop moved to breakeven
+    days_held:        int  = 0
+    pending_exit:     bool = False
+    pending_exit_reason: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -153,20 +157,19 @@ def _detect_breakout(df: pd.DataFrame, t: int) -> dict | None:
         if depth > 0.30:
             continue
 
-        # Did today actually break above the base high?
-        if row["high"] <= base_high:
+        # Breakout: intraday high must exceed base high
+        if float(row["high"]) <= base_high:
             continue
 
         # Reject if a higher close exists in the 30 days before the base window —
-        # that would mean the "base high" is not the true most recent peak and
-        # today's entry is a recovery toward a prior high, not a genuine breakout.
+        # prevents flagging recoveries toward a prior peak as genuine breakouts.
         pre_start = max(0, base_start - 30)
         pre_base  = df["close"].iloc[pre_start:base_start]
         if not pre_base.empty and pre_base.max() > base_high:
             continue
 
-        # Entry price
-        entry_price = float(row["open"]) if row["open"] >= base_high else float(base_high)
+        # Enter at breakout level: open if gapped above pivot, else at pivot itself
+        entry_price = float(row["open"]) if float(row["open"]) >= base_high else float(base_high)
         stop_price  = float(row["low"])
 
         if stop_price >= entry_price:
@@ -341,23 +344,23 @@ def _run_simulation(
 
     for dt in all_dates:
 
-        # ── 1. Process pending EMA5 exits (detected yesterday, exit at today open) ──
-        for ticker in [t for t, tr in portfolio.items() if tr.pending_ema_exit]:
+        # ── 1. Process pending exits (EMA5 or time stop detected yesterday) ─────
+        for ticker in [t for t, tr in portfolio.items() if tr.pending_exit]:
             trade = portfolio[ticker]
             df    = dfs[ticker]
             rows  = df[df["date"] == dt]
             if rows.empty:
                 continue
             exit_px = float(rows["open"].iloc[0])
-            cash += exit_px * trade.shares       # return proceeds to cash
+            cash += exit_px * trade.shares
             trade.exit_date   = dt
             trade.exit_price  = exit_px
-            trade.exit_reason = "ema5"
+            trade.exit_reason = trade.pending_exit_reason
             closed.append(trade)
 
-        portfolio = {t: tr for t, tr in portfolio.items() if not tr.pending_ema_exit}
+        portfolio = {t: tr for t, tr in portfolio.items() if not tr.pending_exit}
 
-        # ── 2. Check stops and detect EMA5 exits for remaining positions ────────
+        # ── 2. Update open positions ──────────────────────────────────────────
         to_stop: list[str] = []
 
         for ticker, trade in portfolio.items():
@@ -367,20 +370,31 @@ def _run_simulation(
                 continue
             row = rows.iloc[0]
 
-            # Stop hit intraday — gap-down fills at open
+            trade.days_held += 1
+            initial_risk = trade.entry_price - trade.initial_stop
+
+            # Move stop to breakeven when price hits entry + 2R intraday
+            if not trade.stop_moved_to_be and initial_risk > 0:
+                if float(row["high"]) >= trade.entry_price + 2 * initial_risk:
+                    trade.stop_price      = trade.entry_price
+                    trade.stop_moved_to_be = True
+
+            # Stop hit intraday (initial stop or breakeven stop)
             if float(row["low"]) < trade.stop_price:
                 exit_px = min(float(row["open"]), trade.stop_price)
                 cash += exit_px * trade.shares
                 trade.exit_date   = dt
                 trade.exit_price  = exit_px
-                trade.exit_reason = "stop"
+                trade.exit_reason = "breakeven_stop" if trade.stop_moved_to_be else "stop"
                 closed.append(trade)
                 to_stop.append(ticker)
                 continue
 
-            # EMA5 close — flag for exit at next open
+            # EMA5 exit: close below EMA5 — exit at next open
             if not pd.isna(row["ema_5"]) and float(row["close"]) < float(row["ema_5"]):
-                trade.pending_ema_exit = True
+                if not trade.pending_exit:
+                    trade.pending_exit        = True
+                    trade.pending_exit_reason = "ema5"
 
         for ticker in to_stop:
             portfolio.pop(ticker, None)
@@ -431,6 +445,7 @@ def _run_simulation(
                     entry_date=dt,
                     entry_price=entry_px,
                     stop_price=stop_px,
+                    initial_stop=stop_px,
                     shares=shares,
                     base_days=sig["base_days"],
                     prior_move_pct=sig["prior_move_pct"],
@@ -504,6 +519,8 @@ def _stats(trades: list[Trade], curve: list[tuple]) -> dict:
         "cagr_pct":         cagr,
         "final_equity_nok": equities[-1],
         "stop_exits":       sum(1 for t in trades if t.exit_reason == "stop"),
+        "breakeven_exits":  sum(1 for t in trades if t.exit_reason == "breakeven_stop"),
+        "time_stop_exits":  sum(1 for t in trades if t.exit_reason == "time_stop"),
         "ema5_exits":       sum(1 for t in trades if t.exit_reason == "ema5"),
         "open_exits":       sum(1 for t in trades if t.exit_reason == "open_positions"),
     }
@@ -559,6 +576,8 @@ def _save_summary(stats: dict, path: Path) -> None:
         f"CAGR             : {stats['cagr_pct']:.1f}%",
         f"Final equity     : {stats['final_equity_nok']:,.0f} NOK",
         f"Stop exits       : {stats['stop_exits']}",
+        f"Breakeven exits  : {stats['breakeven_exits']}",
+        f"Time stop exits  : {stats['time_stop_exits']}",
         f"EMA5 exits       : {stats['ema5_exits']}",
         f"Open at end      : {stats['open_exits']}",
         "=" * 54,
@@ -750,6 +769,83 @@ def _plot_trade(trade: Trade, df: pd.DataFrame, path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Parameter sweep
+# ---------------------------------------------------------------------------
+def _run_sweep(dfs: dict, date_signals: dict) -> None:
+    """
+    Grid search over min_prior_move × max_base_days.
+    Filters the pre-computed signal cache — no re-scanning needed.
+    """
+    prior_move_vals = [0.30, 0.40, 0.50, 0.60]
+    max_base_vals   = [15,   20,   25,   30  ]
+
+    results = []
+    total = len(prior_move_vals) * len(max_base_vals)
+    run   = 0
+
+    for min_prior in prior_move_vals:
+        for max_base in max_base_vals:
+            run += 1
+            log.info("Sweep %2d/%d  prior>=%.0f%%  base<=%dd",
+                     run, total, min_prior * 100, max_base)
+
+            filtered = {
+                dt: [(tk, sig) for tk, sig in sigs
+                     if sig["prior_move_pct"] >= min_prior
+                     and sig["base_days"]      <= max_base]
+                for dt, sigs in date_signals.items()
+            }
+
+            trades, curve = _run_simulation(dfs, filtered)
+            if not trades:
+                results.append({
+                    "min_prior": f"{min_prior*100:.0f}%",
+                    "max_base":  max_base,
+                    "trades": 0, "win_rate": 0, "cagr": 0,
+                    "avg_r": 0, "avg_win": 0, "avg_loss": 0,
+                    "max_dd": 0, "final_nok": STARTING_EQUITY,
+                })
+                continue
+
+            s = _stats(trades, curve)
+            results.append({
+                "min_prior":  f"{min_prior*100:.0f}%",
+                "max_base":   max_base,
+                "trades":     s["total_trades"],
+                "win_rate":   s["win_rate_pct"],
+                "cagr":       s["cagr_pct"],
+                "avg_r":      s["avg_r"],
+                "avg_win":    s["avg_winner_pct"],
+                "avg_loss":   s["avg_loser_pct"],
+                "max_dd":     s["max_drawdown_pct"],
+                "final_nok":  s["final_equity_nok"],
+            })
+
+    # Save CSV
+    sweep_path = OUTPUT_DIR / "sweep_results.csv"
+    pd.DataFrame(results).to_csv(sweep_path, index=False)
+
+    # Print table
+    hdr = (f"{'Prior':>6}  {'Base':>5}  {'Trades':>7}  {'Win%':>6}  "
+           f"{'CAGR%':>6}  {'AvgR':>6}  {'AvgWin%':>8}  {'AvgLoss%':>9}  "
+           f"{'MaxDD%':>7}  {'FinalNOK':>10}")
+    sep = "-" * len(hdr)
+    lines = ["", "=" * len(hdr), "PARAMETER SWEEP — min prior move x max base length",
+             "=" * len(hdr), hdr, sep]
+    for r in results:
+        lines.append(
+            f"{r['min_prior']:>6}  {r['max_base']:>5}  {r['trades']:>7}  "
+            f"{r['win_rate']:>5.1f}%  {r['cagr']:>+5.1f}%  {r['avg_r']:>+5.2f}R  "
+            f"{r['avg_win']:>+7.1f}%  {r['avg_loss']:>+8.1f}%  "
+            f"{r['max_dd']:>6.1f}%  {r['final_nok']:>10,.0f}"
+        )
+    lines.append("=" * len(hdr))
+    print("\n".join(lines))
+    (OUTPUT_DIR / "sweep_results.txt").write_text("\n".join(lines), encoding="utf-8")
+    log.info("Sweep results -> %s", sweep_path)
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main() -> None:
@@ -758,6 +854,8 @@ def main() -> None:
     parser.add_argument("--charts",     action="store_true", help="Generate per-trade charts")
     parser.add_argument("--max-charts", type=int, default=200,
                         help="Max trade charts to generate (default 200, sorted by |return|)")
+    parser.add_argument("--sweep",      action="store_true",
+                        help="Run parameter sweep over prior move x base length")
     args = parser.parse_args()
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -772,7 +870,13 @@ def main() -> None:
     log.info("Scanning for Qullamaggie breakout signals...")
     date_signals = _precompute_signals(dfs, force_refresh=args.refresh)
 
-    # 3. Portfolio simulation
+    # 3a. Parameter sweep (optional)
+    if args.sweep:
+        log.info("Running parameter sweep...")
+        _run_sweep(dfs, date_signals)
+        return
+
+    # 3b. Portfolio simulation
     trades, curve = _run_simulation(dfs, date_signals)
     if not trades:
         log.warning("No trades generated — try --refresh or check filter thresholds")
