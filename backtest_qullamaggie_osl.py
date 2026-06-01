@@ -5,7 +5,7 @@ Period  : 2017-01-01 to today
 Universe: OSL common stocks passing the 5M NOK/day liquidity filter
 Entry   : intraday break above base high — max(open, base_high)
 Stop    : low of the entry day
-Exit    : daily close below 5 EMA → exit next-day open
+Exit    : daily close below 5 EMA -> exit next-day open
 Portfolio: max 10 simultaneous positions, 0.5% equity risk per trade
 Starting equity: 100,000 NOK
 
@@ -219,7 +219,7 @@ def _load_data(force_refresh: bool = False) -> dict[str, pd.DataFrame]:
         raw = client.get_instruments()
         osl = raw[
             raw["marketId"].isin(OSL_MARKET_IDS) &
-            (raw["instrumentType"] == 0)
+            (raw["instrument"] == 0)
         ][["insId", "ticker", "name"]].copy()
         osl.to_csv(index_path, index=False)
         log.info("OSL common stocks: %d", len(osl))
@@ -264,13 +264,31 @@ def _load_data(force_refresh: bool = False) -> dict[str, pd.DataFrame]:
 # ---------------------------------------------------------------------------
 # Pre-compute all signals
 # ---------------------------------------------------------------------------
-def _precompute_signals(dfs: dict[str, pd.DataFrame]) -> dict[date, list[tuple[str, dict]]]:
+def _precompute_signals(dfs: dict[str, pd.DataFrame], force_refresh: bool = False) -> dict[date, list[tuple[str, dict]]]:
     """
     Scan every stock's full history once and build a lookup:
-        date → [(ticker, signal_dict), ...]
+        date -> [(ticker, signal_dict), ...]
+    Saves result to a CSV cache so subsequent runs skip the scan entirely.
+    Pass force_refresh=True to re-scan even if cache exists.
     """
-    date_signals: dict[date, list] = defaultdict(list)
+    import json as _json
+
+    cache_path = CACHE_DIR / "signals_cache.csv"
+
+    if cache_path.exists() and not force_refresh:
+        log.info("Loading signals from cache: %s", cache_path)
+        raw = pd.read_csv(cache_path)
+        raw["date"] = pd.to_datetime(raw["date"]).dt.date
+        date_signals: dict[date, list] = defaultdict(list)
+        for row in raw.itertuples():
+            sig = _json.loads(row.signal_json)
+            date_signals[row.date].append((row.ticker, sig))
+        log.info("Loaded %d signals across %d breakout days", len(raw), len(date_signals))
+        return date_signals
+
+    date_signals = defaultdict(list)
     total = len(dfs)
+    rows = []
 
     for i, (ticker, df) in enumerate(dfs.items(), 1):
         for t in range(60, len(df)):
@@ -280,12 +298,17 @@ def _precompute_signals(dfs: dict[str, pd.DataFrame]) -> dict[date, list[tuple[s
             sig = _detect_breakout(df, t)
             if sig:
                 date_signals[dt].append((ticker, sig))
+                rows.append({"date": dt, "ticker": ticker,
+                             "signal_json": _json.dumps({k: v for k, v in sig.items()
+                                                         if k != "_depth"})})
 
         if i % 25 == 0 or i == total:
             log.info("Signal scan %3d / %d  (signals so far: %d)",
                      i, total, sum(len(v) for v in date_signals.values()))
 
-    log.info("Signal pre-computation done: %d breakout days",  len(date_signals))
+    pd.DataFrame(rows).to_csv(cache_path, index=False)
+    log.info("Signal pre-computation done: %d breakout days — cached to %s",
+             len(date_signals), cache_path)
     return date_signals
 
 
@@ -304,7 +327,7 @@ def _run_simulation(
     closed:    list[Trade]      = []
     curve:     list[tuple]      = []
 
-    log.info("Simulation: %s → %s  (%d trading days)",
+    log.info("Simulation: %s to %s  (%d trading days)",
              BACKTEST_START, all_dates[-1], len(all_dates))
 
     for dt in all_dates:
@@ -338,7 +361,7 @@ def _run_simulation(
 
             # Stop hit intraday
             if float(row["low"]) < trade.stop_price:
-                # Gap-down: open below stop → fill at open
+                # Gap-down: open below stop -> fill at open
                 exit_px = min(float(row["open"]), trade.stop_price)
                 pnl = (exit_px - trade.entry_price) * trade.shares
                 equity += pnl
@@ -373,8 +396,12 @@ def _run_simulation(
                 gap = entry_px - stop_px
                 if gap <= 0:
                     continue
+                # Reject degenerate stops (< 1% below entry — likely a flat bar)
+                if gap / entry_px < 0.01:
+                    continue
                 risk_nok = equity * RISK_PER_TRADE
-                shares   = risk_nok / gap
+                # Cap position value at 20% of equity to avoid runaway leverage
+                shares = min(risk_nok / gap, equity * 0.20 / entry_px)
                 portfolio[ticker] = Trade(
                     ticker=ticker,
                     entry_date=dt,
@@ -475,17 +502,17 @@ def _save_csv(trades: list[Trade], path: Path) -> None:
             "quality_score":  t.quality_score,
         })
     pd.DataFrame(rows).sort_values("entry_date").to_csv(path, index=False)
-    log.info("Saved %d trades → %s", len(trades), path)
+    log.info("Saved %d trades -> %s", len(trades), path)
 
 
 def _save_summary(stats: dict, path: Path) -> None:
     lines = [
         "=" * 54,
         "QULLAMAGGIE OSL BACKTEST — SUMMARY",
-        f"Period : {BACKTEST_START} → today",
+        f"Period : {BACKTEST_START} to today",
         f"Equity : {STARTING_EQUITY:,.0f} NOK start  |  max {MAX_POSITIONS} positions",
         f"Risk   : {RISK_PER_TRADE*100:.1f}% per trade (stop = low of entry day)",
-        f"Exit   : close < 5 EMA → next open",
+        f"Exit   : close < 5 EMA -> next open",
         "=" * 54,
         f"Total trades     : {stats['total_trades']}",
         f"Win rate         : {stats['win_rate_pct']:.1f}%",
@@ -505,7 +532,7 @@ def _save_summary(stats: dict, path: Path) -> None:
         "=" * 54,
     ]
     text = "\n".join(lines)
-    path.write_text(text)
+    path.write_text(text, encoding="utf-8")
     print("\n" + text)
 
 
@@ -541,7 +568,7 @@ def _plot_equity(curve: list[tuple], stats: dict, path: Path) -> None:
     fig.tight_layout()
     fig.savefig(str(path), dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
     plt.close(fig)
-    log.info("Equity curve → %s", path)
+    log.info("Equity curve -> %s", path)
 
 
 def _plot_trade(trade: Trade, df: pd.DataFrame, path: Path) -> None:
@@ -572,7 +599,7 @@ def _plot_trade(trade: Trade, df: pd.DataFrame, path: Path) -> None:
     ret  = (trade.exit_price - trade.entry_price) / trade.entry_price * 100
     rmul = (trade.exit_price - trade.entry_price) / (trade.entry_price - trade.stop_price)
     col  = "#3fb950" if ret > 0 else "#f85149"
-    ttl  = (f"{trade.ticker}  {trade.entry_date} → {trade.exit_date}"
+    ttl  = (f"{trade.ticker}  {trade.entry_date} -> {trade.exit_date}"
             f"  ({trade.exit_reason})  {ret:+.1f}%  {rmul:+.2f}R")
 
     try:
@@ -618,7 +645,7 @@ def main() -> None:
 
     # 2. Pre-compute all breakout signals
     log.info("Scanning for Qullamaggie breakout signals...")
-    date_signals = _precompute_signals(dfs)
+    date_signals = _precompute_signals(dfs, force_refresh=args.refresh)
 
     # 3. Portfolio simulation
     trades, curve = _run_simulation(dfs, date_signals)
@@ -651,7 +678,7 @@ def main() -> None:
             _plot_trade(t, dfs[t.ticker], charts_dir / fname)
             if i % 25 == 0:
                 log.info("  %d / %d charts done", i, len(sorted_trades))
-        log.info("Charts → %s", charts_dir)
+        log.info("Charts -> %s", charts_dir)
 
     log.info("All output in: %s", OUTPUT_DIR)
 
