@@ -737,13 +737,13 @@ def get_newsletter(date: str | None = None) -> tuple[dict | None, list[dict]]:
 
         if date:
             r = (client.table("newsletter_market")
-                 .select("id,email_date,subject,market_stance,market_notes")
+                 .select("id,email_date,subject,market_stance,market_notes,risk_environment,risk_rationale")
                  .eq("email_date", date)
                  .limit(1)
                  .execute())
         else:
             r = (client.table("newsletter_market")
-                 .select("id,email_date,subject,market_stance,market_notes")
+                 .select("id,email_date,subject,market_stance,market_notes,risk_environment,risk_rationale")
                  .order("email_date", desc=True)
                  .limit(1)
                  .execute())
@@ -1275,6 +1275,41 @@ def _render_newsletter_page(sel_date: str | None = None):
             "The Takeout export is usually ready within a few hours of requesting it."
         )
         return
+
+    # ── Risk On / Risk Off banner ─────────────────────────────────────────────
+    _risk_raw = (_market.get("risk_environment") or "").lower()
+    # Fall back: derive from market_stance for newsletters ingested before this field existed
+    if not _risk_raw or _risk_raw == "neutral":
+        _stance_raw = (_market.get("market_stance") or "").lower()
+        if _stance_raw == "bullish":
+            _risk_raw = "risk_on"
+        elif _stance_raw in ("bearish", "cautious"):
+            _risk_raw = "risk_off"
+        else:
+            _risk_raw = "neutral"
+
+    _risk_cfg = {
+        "risk_on":  ("RISK ON",  "#3fb950", "🟢"),
+        "risk_off": ("RISK OFF", "#f85149", "🔴"),
+        "neutral":  ("NEUTRAL",  "#e3b341", "🟡"),
+    }.get(_risk_raw, ("NEUTRAL", "#e3b341", "🟡"))
+    _risk_label, _risk_color, _risk_icon = _risk_cfg
+    _risk_rationale = _market.get("risk_rationale") or _market.get("market_notes") or ""
+
+    st.markdown(
+        f'<div style="display:flex;align-items:flex-start;gap:12px;padding:10px 14px;'
+        f'background:{_risk_color}11;border:1px solid {_risk_color}44;'
+        f'border-radius:8px;margin-bottom:12px">'
+        f'<span style="font-size:22px;line-height:1.2">{_risk_icon}</span>'
+        f'<div>'
+        f'<span style="font-size:15px;font-weight:700;color:{_risk_color};'
+        f'letter-spacing:0.5px">{_risk_label}</span>'
+        f'<span style="color:#7d8590;font-size:11px;margin-left:10px">{_market.get("email_date","")}</span>'
+        + (f'<div style="color:#8b949e;font-size:12px;margin-top:3px">{_risk_rationale}</div>'
+           if _risk_rationale else "")
+        + f'</div></div>',
+        unsafe_allow_html=True,
+    )
 
     _tab_track, _tab_watch, _tab_port = st.tabs(["📊 Track Record", "📋 Watchlist", "💼 Portfolio"])
 

@@ -18,6 +18,8 @@ Schema:
 {
   "market_stance": "bullish|bearish|neutral|cautious",
   "market_notes": "1-2 sentence summary of market commentary",
+  "risk_environment": "risk_on|risk_off|neutral",
+  "risk_rationale": "1-2 sentences: the specific fundamental/breadth/macro reasons Alex gives for this risk conclusion (e.g. breadth improving, internals weakening, macro headwinds, etc.)",
   "portfolio_table": [
     {
       "ticker": "NVDA",
@@ -43,6 +45,10 @@ Schema:
 }
 
 Rules:
+- risk_environment: "risk_on" if Alex's commentary is broadly constructive (breadth improving,
+  internals healthy, macro supportive, he is adding exposure); "risk_off" if he is cautious,
+  reducing exposure, or cites deteriorating internals/macro headwinds; "neutral" if mixed or
+  he gives no clear directional lean on market conditions.
 - Strip $ prefix from tickers (e.g. $NVDA → NVDA)
 - portfolio_table: the current open positions table (entry price, stop, size %, trim targets).
   Include every row you can find. Use null for any field not visible in the text.

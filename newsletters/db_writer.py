@@ -38,8 +38,10 @@ def write_newsletter(
 ) -> None:
     """Upsert one newsletter into newsletter_market + newsletter_picks."""
 
-    stance = (extracted.get("market_stance") or "unknown").lower()
-    notes  = extracted.get("market_notes") or ""
+    stance       = (extracted.get("market_stance") or "unknown").lower()
+    notes        = extracted.get("market_notes") or ""
+    risk_env     = (extracted.get("risk_environment") or "neutral").lower()
+    risk_rat     = extracted.get("risk_rationale") or ""
 
     picks: list[dict] = []
 
@@ -134,12 +136,14 @@ def write_newsletter(
 
     # Upsert newsletter_market row
     client.table("newsletter_market").upsert({
-        "email_date":     str(email_date),
-        "subject":        subject,
-        "market_stance":  stance,
-        "market_notes":   notes,
-        "raw_text":       raw_text[:10000],
-        "processed_at":   datetime.utcnow().isoformat(),
+        "email_date":       str(email_date),
+        "subject":          subject,
+        "market_stance":    stance,
+        "market_notes":     notes,
+        "risk_environment": risk_env,
+        "risk_rationale":   risk_rat,
+        "raw_text":         raw_text[:10000],
+        "processed_at":     datetime.utcnow().isoformat(),
     }, on_conflict="email_date").execute()
 
     if not picks:
