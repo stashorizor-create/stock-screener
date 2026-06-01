@@ -53,6 +53,7 @@ STARTING_EQUITY  = 100_000.0           # NOK
 MAX_POSITIONS    = 10
 RISK_PER_TRADE   = 0.005               # 0.5% of current equity
 MIN_LIQUIDITY    = 5_000_000           # price × 10d avg vol (NOK/day)
+MIN_QUALITY      = 0.0                 # minimum quality score (0 = no filter; scores range ~38-88)
 
 OUTPUT_DIR  = ROOT / "backtest_output"
 CACHE_DIR   = OUTPUT_DIR / "data_cache"
@@ -330,7 +331,7 @@ def _run_simulation(
 
     all_dates = sorted({d for df in dfs.values() for d in df["date"] if d >= BACKTEST_START})
 
-    equity    = STARTING_EQUITY
+    cash      = STARTING_EQUITY   # available funds (reduced on entry, restored on exit)
     portfolio: dict[str, Trade] = {}
     closed:    list[Trade]      = []
     curve:     list[tuple]      = []
@@ -348,10 +349,9 @@ def _run_simulation(
             if rows.empty:
                 continue
             exit_px = float(rows["open"].iloc[0])
-            pnl = (exit_px - trade.entry_price) * trade.shares
-            equity += pnl
-            trade.exit_date  = dt
-            trade.exit_price = exit_px
+            cash += exit_px * trade.shares       # return proceeds to cash
+            trade.exit_date   = dt
+            trade.exit_price  = exit_px
             trade.exit_reason = "ema5"
             closed.append(trade)
 
@@ -367,14 +367,12 @@ def _run_simulation(
                 continue
             row = rows.iloc[0]
 
-            # Stop hit intraday
+            # Stop hit intraday — gap-down fills at open
             if float(row["low"]) < trade.stop_price:
-                # Gap-down: open below stop -> fill at open
                 exit_px = min(float(row["open"]), trade.stop_price)
-                pnl = (exit_px - trade.entry_price) * trade.shares
-                equity += pnl
-                trade.exit_date  = dt
-                trade.exit_price = exit_px
+                cash += exit_px * trade.shares
+                trade.exit_date   = dt
+                trade.exit_price  = exit_px
                 trade.exit_reason = "stop"
                 closed.append(trade)
                 to_stop.append(ticker)
@@ -390,26 +388,44 @@ def _run_simulation(
         # ── 3. Enter new positions ───────────────────────────────────────────────
         slots = MAX_POSITIONS - len(portfolio)
         if slots > 0 and dt in date_signals:
+            # Mark-to-market equity for sizing: cash + open position values
+            open_value = sum(
+                tr.shares * float(dfs[tk][dfs[tk]["date"] <= dt]["close"].iloc[-1])
+                for tk, tr in portfolio.items()
+                if not dfs[tk][dfs[tk]["date"] <= dt].empty
+            )
+            equity_now = cash + open_value
+
             candidates = [
                 (ticker, sig) for ticker, sig in date_signals[dt]
                 if ticker not in portfolio
+                and sig["quality_score"] >= MIN_QUALITY
             ]
             candidates.sort(key=lambda x: x[1]["quality_score"], reverse=True)
 
             for ticker, sig in candidates:
-                if slots <= 0:
+                if slots <= 0 or cash <= 0:
                     break
                 entry_px = float(sig["entry_price"])
                 stop_px  = float(sig["stop_price"])
                 gap = entry_px - stop_px
                 if gap <= 0:
                     continue
-                # Reject degenerate stops (< 1% below entry — likely a flat bar)
                 if gap / entry_px < 0.01:
                     continue
-                risk_nok = equity * RISK_PER_TRADE
-                # Cap position value at 20% of equity to avoid runaway leverage
-                shares = min(risk_nok / gap, equity * 0.20 / entry_px)
+
+                risk_nok = equity_now * RISK_PER_TRADE
+                # Cap at 20% of total equity and available cash
+                shares = min(
+                    risk_nok / gap,
+                    equity_now * 0.20 / entry_px,
+                    cash * 0.99  / entry_px,   # never exceed available cash
+                )
+                cost = shares * entry_px
+                if cost < 100:               # position too small to bother
+                    continue
+
+                cash -= cost                 # deduct from available funds
                 portfolio[ticker] = Trade(
                     ticker=ticker,
                     entry_date=dt,
@@ -422,7 +438,14 @@ def _run_simulation(
                 )
                 slots -= 1
 
-        curve.append((dt, round(equity, 2)))
+        # ── Equity curve: cash + mark-to-market value of open positions ──────
+        open_value = 0.0
+        for tk, tr in portfolio.items():
+            # Use last available close on or before dt (handles holidays/gaps)
+            day_rows = dfs[tk][dfs[tk]["date"] <= dt]
+            if not day_rows.empty:
+                open_value += tr.shares * float(day_rows["close"].iloc[-1])
+        curve.append((dt, round(cash + open_value, 2)))
 
     # ── 4. Close remaining open positions at last price ──────────────────────
     last_date = all_dates[-1]
@@ -430,14 +453,15 @@ def _run_simulation(
         df = dfs[ticker]
         last_row = df[df["date"] <= last_date].iloc[-1]
         exit_px  = float(last_row["close"])
-        pnl = (exit_px - trade.entry_price) * trade.shares
-        equity += pnl
+        cash += exit_px * trade.shares
         trade.exit_date   = last_date
         trade.exit_price  = exit_px
         trade.exit_reason = "open_positions"
         closed.append(trade)
 
-    log.info("Simulation done: %d closed trades, final equity %.0f NOK", len(closed), equity)
+    final_equity = cash
+    log.info("Simulation done: %d closed trades, final equity %.0f NOK",
+             len(closed), final_equity)
     return closed, curve
 
 
@@ -544,6 +568,98 @@ def _save_summary(stats: dict, path: Path) -> None:
     print("\n" + text)
 
 
+def _save_yearly_summary(
+    trades: list[Trade],
+    curve:  list[tuple[date, float]],
+    path:   Path,
+) -> None:
+    # Map equity curve to dict for quick lookup
+    equity_by_date = {dt: eq for dt, eq in curve}
+    all_years = sorted({t.entry_date.year for t in trades})
+
+    rows = []
+    for yr in all_years:
+        yr_trades = [t for t in trades if t.entry_date.year == yr]
+        if not yr_trades:
+            continue
+
+        rets  = [(t.exit_price - t.entry_price) / t.entry_price * 100 for t in yr_trades]
+        rmult = [
+            (t.exit_price - t.entry_price) / (t.entry_price - t.stop_price)
+            for t in yr_trades if (t.entry_price - t.stop_price) > 0
+        ]
+        wins = [r for r in rets if r > 0]
+        loss = [r for r in rets if r <= 0]
+
+        # Max drawdown within this calendar year using the equity curve
+        yr_curve = [(dt, eq) for dt, eq in curve if dt.year == yr]
+        peak = yr_curve[0][1]; max_dd = 0.0
+        for _, eq in yr_curve:
+            if eq > peak: peak = eq
+            dd = (peak - eq) / peak
+            if dd > max_dd: max_dd = dd
+
+        # Annual return: equity at end of year vs start of year
+        eq_start = yr_curve[0][1]
+        eq_end   = yr_curve[-1][1]
+        annual_ret = (eq_end - eq_start) / eq_start * 100
+
+        rows.append({
+            "year":          yr,
+            "trades":        len(yr_trades),
+            "win_rate_pct":  round(len(wins) / len(rets) * 100, 1),
+            "annual_ret_pct":round(annual_ret, 1),
+            "avg_ret_pct":   round(sum(rets) / len(rets), 2),
+            "avg_r":         round(sum(rmult) / len(rmult), 2) if rmult else 0,
+            "avg_winner_pct":round(sum(wins) / len(wins), 1) if wins else 0,
+            "avg_loser_pct": round(sum(loss) / len(loss), 1) if loss else 0,
+            "best_trade_pct":round(max(rets), 1),
+            "worst_trade_pct":round(min(rets), 1),
+            "max_dd_pct":    round(max_dd * 100, 1),
+            "eq_start":      round(eq_start),
+            "eq_end":        round(eq_end),
+        })
+
+    df = pd.DataFrame(rows)
+    df.to_csv(path.with_suffix(".csv"), index=False)
+
+    # Pretty text table
+    col_w = {
+        "year": 6, "trades": 7, "win_rate_pct": 8, "annual_ret_pct": 11,
+        "avg_ret_pct": 9, "avg_r": 7, "avg_winner_pct": 10, "avg_loser_pct": 10,
+        "best_trade_pct": 7, "worst_trade_pct": 8, "max_dd_pct": 8,
+    }
+    headers = {
+        "year": "Year", "trades": "Trades", "win_rate_pct": "Win %",
+        "annual_ret_pct": "Annual Ret%", "avg_ret_pct": "Avg Ret%",
+        "avg_r": "Avg R", "avg_winner_pct": "Avg Win%", "avg_loser_pct": "Avg Loss%",
+        "best_trade_pct": "Best%", "worst_trade_pct": "Worst%", "max_dd_pct": "MaxDD%",
+    }
+    sep = "  ".join("-" * w for w in col_w.values())
+    hdr = "  ".join(headers[k].ljust(w) for k, w in col_w.items())
+    lines = ["=" * len(sep), "QULLAMAGGIE OSL — PER-YEAR BREAKDOWN", "=" * len(sep), hdr, sep]
+    for r in rows:
+        line = "  ".join([
+            str(r["year"]).ljust(col_w["year"]),
+            str(r["trades"]).ljust(col_w["trades"]),
+            f"{r['win_rate_pct']:.1f}%".ljust(col_w["win_rate_pct"]),
+            f"{r['annual_ret_pct']:+.1f}%".ljust(col_w["annual_ret_pct"]),
+            f"{r['avg_ret_pct']:+.2f}%".ljust(col_w["avg_ret_pct"]),
+            f"{r['avg_r']:+.2f}R".ljust(col_w["avg_r"]),
+            f"{r['avg_winner_pct']:+.1f}%".ljust(col_w["avg_winner_pct"]),
+            f"{r['avg_loser_pct']:+.1f}%".ljust(col_w["avg_loser_pct"]),
+            f"{r['best_trade_pct']:+.1f}%".ljust(col_w["best_trade_pct"]),
+            f"{r['worst_trade_pct']:+.1f}%".ljust(col_w["worst_trade_pct"]),
+            f"{r['max_dd_pct']:.1f}%".ljust(col_w["max_dd_pct"]),
+        ])
+        lines.append(line)
+    lines.append("=" * len(sep))
+    text = "\n".join(lines)
+    path.with_suffix(".txt").write_text(text, encoding="utf-8")
+    print("\n" + text)
+    log.info("Yearly summary -> %s / %s", path.with_suffix(".txt"), path.with_suffix(".csv"))
+
+
 def _plot_equity(curve: list[tuple], stats: dict, path: Path) -> None:
     dates, equities = zip(*curve)
     fig, ax = plt.subplots(figsize=(14, 6), facecolor="#131722")
@@ -619,12 +735,13 @@ def _plot_trade(trade: Trade, df: pd.DataFrame, path: Path) -> None:
             tight_layout=True, returnfig=True,
         )
         ax = axes[0]
+        ax.grid(False)
         entry_x = ei - s
         exit_x  = xi - s
-        ax.axvline(entry_x, color="#3fb950", linewidth=1.0, alpha=0.7, linestyle=":")
-        ax.axvline(exit_x,  color=col,       linewidth=1.0, alpha=0.7, linestyle=":")
-        ax.axhline(trade.entry_price, color="#3fb950", linewidth=0.8, linestyle="--", alpha=0.6)
-        ax.axhline(trade.stop_price,  color="#f85149", linewidth=0.8, linestyle="--", alpha=0.6)
+        ax.axvline(entry_x, color="#3fb950", linewidth=1.2, alpha=0.85, linestyle="-")
+        ax.axvline(exit_x,  color=col,       linewidth=1.2, alpha=0.85, linestyle="-")
+        ax.axhline(trade.entry_price, color="#3fb950", linewidth=1.2, linestyle="-", alpha=0.85)
+        ax.axhline(trade.stop_price,  color="#f85149", linewidth=1.2, linestyle="-", alpha=0.85)
         fig.savefig(str(path), dpi=120, bbox_inches="tight")
         plt.close(fig)
     except Exception as exc:
@@ -665,6 +782,7 @@ def main() -> None:
     s = _stats(trades, curve)
     _save_csv(trades,     OUTPUT_DIR / "trades.csv")
     _save_summary(s,      OUTPUT_DIR / "summary.txt")
+    _save_yearly_summary(trades, curve, OUTPUT_DIR / "yearly_summary")
     _plot_equity(curve, s, OUTPUT_DIR / "equity_curve.png")
 
     # 5. Per-trade charts (optional)
