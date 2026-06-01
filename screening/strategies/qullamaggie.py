@@ -87,6 +87,15 @@ def detect_qullamaggie_setup(
         if current_close > base_high * (1 + pivot_proximity_pct):
             continue
 
+        # Reject if a higher close exists in the 30 days before the base window.
+        # Prevents flagging recoveries toward a prior peak as valid pre-breakout setups —
+        # the base high must be the most recent significant peak, not a lower-high within
+        # a larger ongoing correction.
+        pre_start  = max(0, base_start - 30)
+        pre_base   = df["close"].iloc[pre_start:base_start]
+        if not pre_base.empty and pre_base.max() > base_high:
+            continue
+
         # Check prior move (look back up to 6 months before base)
         prior_start = max(0, base_start - 126)
         prior = df["close"].iloc[prior_start:base_start]

@@ -156,6 +156,14 @@ def _detect_breakout(df: pd.DataFrame, t: int) -> dict | None:
         if row["high"] <= base_high:
             continue
 
+        # Reject if a higher close exists in the 30 days before the base window —
+        # that would mean the "base high" is not the true most recent peak and
+        # today's entry is a recovery toward a prior high, not a genuine breakout.
+        pre_start = max(0, base_start - 30)
+        pre_base  = df["close"].iloc[pre_start:base_start]
+        if not pre_base.empty and pre_base.max() > base_high:
+            continue
+
         # Entry price
         entry_price = float(row["open"]) if row["open"] >= base_high else float(base_high)
         stop_price  = float(row["low"])
