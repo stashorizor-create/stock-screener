@@ -53,8 +53,20 @@ Rules:
 - portfolio_table: the current open positions table (entry price, stop, size %, trim targets).
   Include every row you can find. Use null for any field not visible in the text.
   Only include rows that have at least an entry price. Return [] if no portfolio table found.
+- focus_list: the tickers in Alex's "FocusList" / "Focus List" (his top ideas, often
+  with a price level in parentheses).
 - price_level in focus_list: actual stock price in parentheses (e.g. "$LITE (22)" → 22.0).
   If the number is clearly a conviction/rating score (70-100 scale), set to null and put in notes.
+- scan_21dma: the tickers listed under the heading
+  "Liquid Leaders 21dma-structure Pullback scan (LONG)". This is Alex's actionable
+  pullback watchlist. Include ONLY that LONG pullback scan. Do NOT include the SHORT
+  scan, and do NOT include the broad "Liquid Leaders Universe (top RS)" list here.
+  Return [] if the LONG scan is absent or shows "None".
+- IMPORTANT: do NOT extract the broad "Liquid Leaders Universe (top RS)" list into
+  scan_21dma, stalk_list, or any other field — leave it out entirely.
+- stalk_list / ep_list: only populate these from sections explicitly labelled as a
+  stalk list or an Episodic Pivot (EP) list of individual tickers. Leave them [] if
+  no such dedicated section exists.
 - Use null for any section not present in the newsletter
 - If a ticker appears in multiple sections, include it in all relevant sections
 
@@ -92,10 +104,13 @@ Return ONLY valid JSON, no markdown:
 
 def extract_from_text(text: str, client) -> dict:
     """Extract structured newsletter data from plain text using Claude Haiku."""
+    # Send the whole newsletter (capped generously). The Liquid Leaders / 21dma
+    # pullback scan sections sit ~9-11k chars in, so an 8k cap silently dropped
+    # them — the actionable watchlist lists never reached the model.
     resp = client.messages.create(
         model="claude-haiku-4-5",
         max_tokens=1500,
-        messages=[{"role": "user", "content": _TEXT_PROMPT + text[:8000]}],
+        messages=[{"role": "user", "content": _TEXT_PROMPT + text[:30000]}],
     )
     return _parse_json(resp.content[0].text, fallback={})
 
