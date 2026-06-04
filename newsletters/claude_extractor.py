@@ -1,8 +1,19 @@
 """Use Claude Haiku (text + vision) to extract structured data from newsletter content."""
 from __future__ import annotations
 
+import base64
+import io
 import json
 import re
+
+# Anthropic downscales any image whose long edge exceeds this before the model
+# sees it. A raw phone/desktop screenshot (often 2000-4000 px wide) therefore
+# arrives shrunk to the point where small table digits turn to mush and the
+# model reads nothing → []. We downscale ourselves with a good resampler so the
+# table text stays as legible as possible, and keep the payload under the API
+# size limit.
+_VISION_MAX_EDGE = 1568
+_MAX_IMAGE_BYTES = 4_500_000  # Anthropic rejects images above ~5 MB; stay clear.
 
 
 # ---------------------------------------------------------------------------
@@ -119,46 +130,172 @@ def extract_from_images(images: list[tuple[str, str]], client) -> list[dict]:
     """
     Extract trade tables from images using Claude Haiku vision.
     images: list of (base64_data, media_type) tuples.
-    Returns flat list of trade row dicts.
+    Returns flat list of trade row dicts. Per-image failures are logged and
+    skipped (used in the bulk newsletter run where some images are charts).
     """
     results = []
     for b64_data, media_type in images:
-        try:
-            resp = client.messages.create(
-                model="claude-haiku-4-5",
-                max_tokens=800,
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": media_type,
-                                "data": b64_data,
-                            },
-                        },
-                        {"type": "text", "text": _VISION_PROMPT},
-                    ],
-                }],
-            )
-            rows = _parse_json(resp.content[0].text, fallback=[])
-            if isinstance(rows, list):
-                results.extend(rows)
-        except Exception:
-            continue
+        rows, err = extract_one_image(b64_data, media_type, client)
+        if err:
+            # Don't kill the whole run for one bad image, but make it visible.
+            print(f"[vision] image skipped: {err}")
+        results.extend(rows)
     return results
+
+
+def extract_one_image(
+    b64_data: str, media_type: str, client
+) -> tuple[list[dict], str | None]:
+    """
+    Run vision extraction on a single image.
+
+    Returns (rows, error). On success error is None. On failure rows is [] and
+    error is a human-readable reason (oversized image, API error, model returned
+    no JSON, …) so the caller can show the user *why* nothing came back instead
+    of a blanket "no trades found".
+    """
+    try:
+        b64_data, media_type = _prepare_image(b64_data, media_type)
+    except Exception as exc:  # decode / re-encode problem
+        return [], f"could not read image ({exc})"
+
+    if len(b64_data) > _MAX_IMAGE_BYTES * 4 // 3:
+        return [], "image is too large even after downscaling — crop to just the positions table and retry"
+
+    try:
+        resp = client.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=800,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": media_type,
+                            "data": b64_data,
+                        },
+                    },
+                    {"type": "text", "text": _VISION_PROMPT},
+                ],
+            }],
+        )
+    except Exception as exc:
+        return [], f"vision API error: {exc}"
+
+    raw = resp.content[0].text if resp.content else ""
+    rows = _parse_json(raw, fallback=None)
+    if rows is None:
+        snippet = (raw or "").strip().replace("\n", " ")[:160]
+        return [], f"model did not return valid JSON (got: {snippet!r})"
+    if not isinstance(rows, list):
+        return [], "model returned JSON but not a list of positions"
+    # Keep only rows that actually carry a ticker.
+    rows = [r for r in rows if isinstance(r, dict) and r.get("ticker")]
+    if not rows:
+        return [], "no positions table detected in the image (looks like a chart or has no ticker rows)"
+    return rows, None
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _sniff_media_type(raw: bytes, fallback: str = "image/png") -> str:
+    """Identify image type from magic bytes; declared type can be wrong/empty."""
+    if raw[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if raw[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if raw[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        return "image/webp"
+    return fallback
+
+
+def _prepare_image(b64_data: str, media_type: str) -> tuple[str, str]:
+    """
+    Downscale oversized screenshots and correct the media type from the bytes.
+
+    Returns (base64, media_type). If Pillow is unavailable we still fix the
+    media type so a mislabelled upload doesn't get rejected by the API.
+    """
+    raw = base64.b64decode(b64_data)
+    media_type = _sniff_media_type(raw, fallback=media_type or "image/png")
+
+    try:
+        from PIL import Image
+    except Exception:
+        return b64_data, media_type
+
+    img = Image.open(io.BytesIO(raw))
+    long_edge = max(img.size)
+    needs_resize = long_edge > _VISION_MAX_EDGE
+    too_big = len(raw) > _MAX_IMAGE_BYTES
+    if not needs_resize and not too_big:
+        return b64_data, media_type
+
+    if img.mode not in ("RGB", "L"):
+        img = img.convert("RGB")
+    if needs_resize:
+        scale = _VISION_MAX_EDGE / long_edge
+        img = img.resize(
+            (max(1, int(img.width * scale)), max(1, int(img.height * scale))),
+            Image.LANCZOS,
+        )
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    return base64.b64encode(buf.getvalue()).decode(), "image/png"
+
+
 def _parse_json(text: str, fallback):
-    text = text.strip()
+    text = (text or "").strip()
     # Strip markdown code fences if model adds them
     text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.MULTILINE).strip()
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        return fallback
+        pass
+    # Model sometimes wraps the JSON in prose ("Here is the table: [...]").
+    # Grab the outermost array or object and try again.
+    candidate = _extract_json_blob(text)
+    if candidate is not None:
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            pass
+    return fallback
+
+
+def _extract_json_blob(text: str) -> str | None:
+    """Return the first balanced [...] or {...} block found in text, else None."""
+    starts = [i for i in (text.find("["), text.find("{")) if i != -1]
+    if not starts:
+        return None
+    start = min(starts)
+    open_ch = text[start]
+    close_ch = "]" if open_ch == "[" else "}"
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == open_ch:
+            depth += 1
+        elif ch == close_ch:
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return None

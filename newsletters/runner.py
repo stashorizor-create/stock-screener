@@ -114,7 +114,7 @@ def run_portfolio_image(
     """
     import base64
     from datetime import date as _date, datetime as _datetime
-    from newsletters.claude_extractor import extract_from_images
+    from newsletters.claude_extractor import extract_one_image
     from newsletters.db_writer import write_newsletter
 
     if isinstance(email_date, str):
@@ -122,9 +122,9 @@ def run_portfolio_image(
 
     client = _make_client()
     b64 = base64.b64encode(image_data).decode()
-    trades = extract_from_images([(b64, media_type)], client)
+    trades, err = extract_one_image(b64, media_type, client)
     if not trades:
-        return False, "No portfolio table found in this image — make sure it shows tickers, entry prices and stops."
+        return False, err or "No portfolio table found in this image — make sure it shows tickers, entry prices and stops."
 
     write_newsletter(
         email_date=email_date,
