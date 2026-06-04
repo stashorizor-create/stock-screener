@@ -26,7 +26,7 @@ sys.path.insert(0, str(ROOT))
 import pandas as pd
 
 from config.settings import settings
-from config.universe_config import EXCHANGES, NORDIC_MARKET_IDS, NORDIC_EXCHANGES, EUROPEAN_EXCHANGES, US_EXCHANGES
+from config.universe_config import EXCHANGES, NORDIC_MARKET_IDS, NORDIC_EXCHANGES, EUROPEAN_EXCHANGES, US_EXCHANGES, MARKET_ID_TO_EXCHANGE
 from data.ingestor import client as borsdata
 from database.models import Alert, Universe, SessionLocal
 from screening.indicators import compute_all, rank_rs_across_universe
@@ -49,28 +49,8 @@ logger = logging.getLogger(__name__)
 HISTORY_DAYS      = 420      # enough for 200-SMA + 52-week levels + buffer
 RS_MIN_PERCENTILE = 70.0     # top 30% relative strength required
 
-# Borsdata marketId → our exchange code (indices excluded)
-MARKET_ID_TO_EXCHANGE: dict[int, str] = {
-    # Sweden — Stockholm
-    1: "STO", 2: "STO", 3: "STO", 4: "STO", 5: "STO", 6: "STO",
-    # Norway — Oslo
-    9: "OSL", 10: "OSL", 11: "OSL", 12: "OSL", 27: "OSL", 78: "OSL",
-    # Finland — Helsinki
-    14: "HEL", 15: "HEL", 16: "HEL", 17: "HEL", 30: "HEL",
-    # Denmark — Copenhagen
-    20: "CPH", 21: "CPH", 22: "CPH", 23: "CPH", 48: "CPH",
-    # US
-    32: "NYSE", 33: "NASDAQ",
-    # Europe (Borsdata global endpoint)
-    38: "LON",   # London Stock Exchange
-    39: "DE",    # Stuttgart / Germany
-    40: "PAR",   # Euronext Paris
-    41: "MAD",   # BME Madrid
-    43: "MIL",   # Borsa Italiana
-    44: "CHE",   # SIX Swiss Exchange
-    45: "BRU",   # Euronext Brussels
-    46: "AMS",   # Euronext Amsterdam
-}
+# MARKET_ID_TO_EXCHANGE moved to config/universe_config.py (shared with the
+# forward-test evaluator). Imported above.
 
 # Region → set of exchange codes (used by --region flag)
 REGION_EXCHANGES: dict[str, set[str]] = {

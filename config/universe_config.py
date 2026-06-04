@@ -174,3 +174,28 @@ NORDIC_MARKET_IDS: frozenset[int] = frozenset({
     14, 15, 16, 17, 30,         # Helsinki
     20, 21, 22, 23, 48,         # Copenhagen
 })
+
+# Borsdata marketId → our exchange code (indices excluded).
+# Single source of truth — imported by run.py (universe build) and the forward-test
+# evaluator (resolving symbol+exchange → Borsdata insId).
+MARKET_ID_TO_EXCHANGE: dict[int, str] = {
+    # Sweden — Stockholm
+    1: "STO", 2: "STO", 3: "STO", 4: "STO", 5: "STO", 6: "STO",
+    # Norway — Oslo
+    9: "OSL", 10: "OSL", 11: "OSL", 12: "OSL", 27: "OSL", 78: "OSL",
+    # Finland — Helsinki
+    14: "HEL", 15: "HEL", 16: "HEL", 17: "HEL", 30: "HEL",
+    # Denmark — Copenhagen
+    20: "CPH", 21: "CPH", 22: "CPH", 23: "CPH", 48: "CPH",
+    # US
+    32: "NYSE", 33: "NASDAQ",
+    # Europe (Borsdata global endpoint)
+    38: "LON",   # London Stock Exchange
+    39: "DE",    # Stuttgart / Germany
+    40: "PAR",   # Euronext Paris
+    41: "MAD",   # BME Madrid
+    43: "MIL",   # Borsa Italiana
+    44: "CHE",   # SIX Swiss Exchange
+    45: "BRU",   # Euronext Brussels
+    46: "AMS",   # Euronext Amsterdam
+}

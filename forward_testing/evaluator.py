@@ -76,6 +76,58 @@ def write_forward_tests(
                 rows_written, run_date, check_date, len(raw_signals) - len(eligible))
 
 
+def _build_insid_resolver(borsdata_client) -> tuple[dict, dict]:
+    """Build symbol→Borsdata insId lookups from the instrument lists.
+
+    universe.borsdata_id is not populated (the nightly upsert omits it), so the
+    evaluator resolves ids itself. Returns two maps:
+      by_exch_ticker: {(exchange_code, TICKER): insId}  — exact, disambiguated
+      by_ticker:      {TICKER: [insId, ...]}            — fallback when ticker is unique
+    """
+    from config.universe_config import MARKET_ID_TO_EXCHANGE
+
+    frames = []
+    for fetch in (borsdata_client.get_instruments, borsdata_client.get_instruments_global):
+        try:
+            frames.append(fetch())
+        except Exception as exc:
+            logger.warning("Resolver: %s failed: %s", getattr(fetch, "__name__", "fetch"), exc)
+
+    by_exch_ticker: dict[tuple[str, str], int] = {}
+    by_ticker: dict[str, list[int]] = {}
+    for df in frames:
+        if df is None or df.empty:
+            continue
+        for ins_id, ticker, market_id in zip(df["insId"], df.get("ticker", []), df["marketId"]):
+            try:
+                ins_id = int(ins_id)
+                market_id = int(market_id)
+            except (TypeError, ValueError):
+                continue
+            ticker = str(ticker or "").upper().strip()
+            if not ticker:
+                continue
+            exch = MARKET_ID_TO_EXCHANGE.get(market_id)
+            if exch:
+                by_exch_ticker[(exch, ticker)] = ins_id
+            by_ticker.setdefault(ticker, [])
+            if ins_id not in by_ticker[ticker]:
+                by_ticker[ticker].append(ins_id)
+    return by_exch_ticker, by_ticker
+
+
+def _resolve_insid(ft, by_exch_ticker: dict, by_ticker: dict) -> int | None:
+    """Resolve a ForwardTest row to a Borsdata insId, disambiguating by exchange."""
+    ticker = str(ft.symbol or "").upper().strip()
+    exch = str(ft.exchange or "").upper().strip()
+    if (exch, ticker) in by_exch_ticker:
+        return by_exch_ticker[(exch, ticker)]
+    ids = by_ticker.get(ticker, [])
+    if len(ids) == 1:        # unique across all markets — safe to use
+        return ids[0]
+    return None              # ambiguous or missing — caller marks as error
+
+
 def evaluate_pending_tests(borsdata_client, dry_run: bool = False) -> int:
     """
     Find pending ForwardTests whose check_date <= today.
@@ -97,17 +149,24 @@ def evaluate_pending_tests(borsdata_client, dry_run: bool = False) -> int:
             return 0
 
         logger.info("Evaluating %d matured forward tests...", len(pending))
+
+        # universe.borsdata_id is not populated, so resolve ids from Borsdata's
+        # instrument lists once for the whole batch (disambiguated by exchange).
+        by_exch_ticker, by_ticker = _build_insid_resolver(borsdata_client)
         evaluated = 0
 
         for ft in pending:
             uni = session.query(Universe).filter(Universe.symbol == ft.symbol).first()
-            if not uni or not uni.borsdata_id:
-                logger.warning("ForwardTest %s: no borsdata_id in universe, marking error", ft.symbol)
+            ins_id = (uni.borsdata_id if (uni and uni.borsdata_id) else None) \
+                or _resolve_insid(ft, by_exch_ticker, by_ticker)
+            if not ins_id:
+                logger.warning("ForwardTest %s (%s): could not resolve Borsdata id, marking error",
+                               ft.symbol, ft.exchange)
                 ft.status = "error"
                 continue
 
             try:
-                df = borsdata_client.get_ohlcv(uni.borsdata_id, from_date=ft.entry_date)
+                df = borsdata_client.get_ohlcv(ins_id, from_date=ft.entry_date)
             except Exception as exc:
                 logger.warning("ForwardTest OHLCV fetch failed for %s: %s", ft.symbol, exc)
                 ft.status = "error"
