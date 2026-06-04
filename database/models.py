@@ -229,6 +229,7 @@ class NewsletterPick(Base):
     email_date       = Column(Date, nullable=False)
     ticker           = Column(String(20), nullable=False)
     action           = Column(String(20))      # FOCUS/LONG/TRIM/OUT/WATCH/EP/STALK
+    entry_date       = Column(Date)            # Alex's actual entry date for the position
     entry_price      = Column(Float)
     stop_price       = Column(Float)
     target_price     = Column(Float)           # trim_1 (first partial target)
@@ -245,7 +246,7 @@ class NewsletterPick(Base):
     # newsletter_picks_multi_position.sql); SQLAlchemy can't express that flag,
     # so this declaration is for ORM awareness/metadata only.
     __table_args__ = (UniqueConstraint("email_date", "ticker", "action",
-                                       "source_section", "entry_price",
+                                       "source_section", "entry_price", "entry_date",
                                        name="uq_newsletter_pick"),)
 
 

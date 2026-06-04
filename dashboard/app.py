@@ -754,7 +754,7 @@ def get_newsletter(date: str | None = None) -> tuple[dict | None, list[dict]]:
         email_date = market["email_date"]
 
         r2 = (client.table("newsletter_picks")
-              .select("id,email_date,ticker,action,entry_price,stop_price,"
+              .select("id,email_date,ticker,action,entry_date,entry_price,stop_price,"
                       "target_price,trim_2,trim_3,position_size_pct,notes,source_section")
               .eq("email_date", email_date)
               .order("source_section")
@@ -1715,6 +1715,7 @@ def _render_newsletter_page(sel_date: str | None = None):
             st.markdown(
                 '<div style="display:flex;gap:4px;padding:0 6px;margin-bottom:2px">'
                 '<div style="flex:2;font-size:10px;color:#7d8590;text-transform:uppercase">Ticker</div>'
+                '<div style="flex:1.4;text-align:right;font-size:10px;color:#7d8590;text-transform:uppercase">Entered</div>'
                 '<div style="flex:1;text-align:right;font-size:10px;color:#7d8590;text-transform:uppercase">Entry</div>'
                 '<div style="flex:1;text-align:right;font-size:10px;color:#7d8590;text-transform:uppercase">Stop</div>'
                 '<div style="flex:1;text-align:right;font-size:10px;color:#7d8590;text-transform:uppercase">Size</div>'
@@ -1728,6 +1729,7 @@ def _render_newsletter_page(sel_date: str | None = None):
             rows_html = ""
             for p in _pt_picks:
                 tk  = p["ticker"]
+                _ed = p.get("entry_date") or "—"
                 _e  = f"${p['entry_price']:.2f}"      if p.get("entry_price")       else "—"
                 _s  = f"${p['stop_price']:.2f}"        if p.get("stop_price")        else "—"
                 _sz = f"{p['position_size_pct']:.1f}%" if p.get("position_size_pct") else "—"
@@ -1753,6 +1755,7 @@ def _render_newsletter_page(sel_date: str | None = None):
                     f'<span style="font-weight:700;color:#e6edf3;font-size:13px">{tk}</span>'
                     + _action_badge(p.get("action") or "") + " " + _in_screener_badge(tk)
                     + f'</div>'
+                    f'<div style="flex:1.4;text-align:right;font-size:11px;color:#8b949e">{_ed}</div>'
                     f'<div style="flex:1;text-align:right;font-size:12px;color:#e6edf3">{_e}</div>'
                     f'<div style="flex:1;text-align:right;font-size:12px;color:#f85149">{_s}</div>'
                     f'<div style="flex:1;text-align:right;font-size:12px;color:#8b949e">{_sz}</div>'
@@ -1869,8 +1872,9 @@ def _render_newsletter_page(sel_date: str | None = None):
                         _port_hline(_pick.get("trim_2"),       "#58a6ff", "T2")
                         _port_hline(_pick.get("trim_3"),       "#a371f7", "T3")
 
-                        # Entry date vline
-                        _entry_dt2 = get_pick_entry_date(_port_sel)
+                        # Entry date vline — prefer the position's real entry date,
+                        # fall back to the newsletter-date proxy only if unavailable.
+                        _entry_dt2 = _pick.get("entry_date") or get_pick_entry_date(_port_sel)
                         if _entry_dt2 and _entry_dt2 in _pdates:
                             _pfig2.add_shape(
                                 type="line",

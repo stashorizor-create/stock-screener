@@ -96,6 +96,7 @@ def write_newsletter(
                 "email_date":        str(email_date),
                 "ticker":            ticker,
                 "action":            (trade.get("action") or "LONG").upper(),
+                "entry_date":        _date_str(trade.get("entry_date")),
                 "entry_price":       _f(trade.get("entry")),
                 "stop_price":        _f(trade.get("stop")),
                 "target_price":      _f(trade.get("trim_1")),
@@ -113,6 +114,7 @@ def write_newsletter(
                 "email_date":        str(email_date),
                 "ticker":            ticker,
                 "action":            (trade.get("action") or "LONG").upper(),
+                "entry_date":        _date_str(trade.get("entry_date")),
                 "entry_price":       _f(trade.get("entry")),
                 "stop_price":        _f(trade.get("stop")),
                 "target_price":      _f(trade.get("trim_1")),
@@ -165,13 +167,13 @@ def write_newsletter(
         portfolio_picks = _dedupe_by_conflict_key(portfolio_picks)
         client.table("newsletter_picks").upsert(
             portfolio_picks,
-            on_conflict="email_date,ticker,action,source_section,entry_price",
+            on_conflict="email_date,ticker,action,source_section,entry_price,entry_date",
         ).execute()
 
     if other_picks:
         client.table("newsletter_picks").upsert(
             other_picks,
-            on_conflict="email_date,ticker,action,source_section,entry_price",
+            on_conflict="email_date,ticker,action,source_section,entry_price,entry_date",
             ignore_duplicates=True,
         ).execute()
 
@@ -179,15 +181,16 @@ def write_newsletter(
 
 
 def _dedupe_by_conflict_key(rows: list[dict]) -> list[dict]:
-    """Keep one row per (email_date, ticker, action, source_section, entry_price); last wins.
+    """Keep one row per (email_date, ticker, action, source_section, entry_price, entry_date); last wins.
 
-    entry_price is in the key so two distinct positions in the same ticker (different
-    entries) are preserved — only exact duplicates of the same position collapse.
+    entry_price and entry_date are in the key so distinct positions in the same ticker
+    (scaled in on different dates/prices) are preserved — only exact duplicates of the
+    same position collapse.
     """
     by_key: dict[tuple, dict] = {}
     for r in rows:
         key = (r.get("email_date"), r.get("ticker"), r.get("action"),
-               r.get("source_section"), r.get("entry_price"))
+               r.get("source_section"), r.get("entry_price"), r.get("entry_date"))
         by_key[key] = r
     return list(by_key.values())
 
@@ -202,4 +205,20 @@ def _f(v) -> float | None:
     try:
         return float(v) if v is not None else None
     except (TypeError, ValueError):
+        return None
+
+
+def _date_str(v) -> str | None:
+    """Accept only a real YYYY-MM-DD date; reject anything the model couldn't read.
+
+    Guards the DATE column against hallucinated/garbage values — a bad date is
+    dropped to null rather than stored as a fantasy entry date.
+    """
+    if not v:
+        return None
+    s = str(v).strip()[:10]
+    try:
+        datetime.strptime(s, "%Y-%m-%d")
+        return s
+    except ValueError:
         return None

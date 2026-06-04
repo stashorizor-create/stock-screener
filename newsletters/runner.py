@@ -68,7 +68,7 @@ def _process_one(email_dt, subject, html_body, text_body, client,
         images = [img for _, img in sized_images[:10]]
         if images:
             try:
-                vision_trades = extract_from_images(images, client)
+                vision_trades = extract_from_images(images, client, context_date=email_date)
                 if vision_trades:
                     logger.info("  Vision: %d trade rows extracted", len(vision_trades))
             except Exception as exc:
@@ -122,7 +122,7 @@ def run_portfolio_image(
 
     client = _make_client()
     b64 = base64.b64encode(image_data).decode()
-    trades, err = extract_one_image(b64, media_type, client)
+    trades, err = extract_one_image(b64, media_type, client, context_date=email_date)
     if not trades:
         return False, err or "No portfolio table found in this image — make sure it shows tickers, entry prices and stops."
 

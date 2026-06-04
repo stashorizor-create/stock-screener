@@ -35,6 +35,7 @@ Schema:
     {
       "ticker": "NVDA",
       "action": "LONG",
+      "entry_date": "2026-05-14",
       "entry": 211.66,
       "stop": 195.0,
       "size_pct": 8.5,
@@ -61,9 +62,11 @@ Rules:
   reducing exposure, or cites deteriorating internals/macro headwinds; "neutral" if mixed or
   he gives no clear directional lean on market conditions.
 - Strip $ prefix from tickers (e.g. $NVDA → NVDA)
-- portfolio_table: the current open positions table (entry price, stop, size %, trim targets).
+- portfolio_table: the current open positions table (entry date, entry price, stop, size %, trim targets).
   Include every row you can find. Use null for any field not visible in the text.
   Only include rows that have at least an entry price. Return [] if no portfolio table found.
+- entry_date: the date a position was entered, as YYYY-MM-DD. The same ticker may have
+  several rows with different entry dates. Use null if no date is shown; never invent one.
 - focus_list: the tickers in Alex's "FocusList" / "Focus List" (his top ideas, often
   with a price level in parentheses).
 - price_level in focus_list: actual stock price in parentheses (e.g. "$LITE (22)" → 22.0).
@@ -93,6 +96,13 @@ and numeric price/metric columns), extract every row.
 For each row read these fields:
 - ticker: the stock symbol (e.g. NVDA, TSLA)
 - action: LONG or SHORT (default LONG if column not present)
+- entry_date: the date this position was entered, read from the row's date column,
+  returned as YYYY-MM-DD. The same ticker may appear on several rows with different
+  entry dates (Alex scales in over time) — read each row's own date.{date_ctx}
+  If a row shows only a month and day with no year, choose the most recent year that
+  makes the date fall on or before the newsletter date above.
+  If the row has no entry-date column or the date is unreadable, use null.
+  NEVER invent, guess, or approximate a date — null is correct when unsure.
 - entry: entry price as an absolute dollar number
 - stop: stop loss as an absolute dollar price (not a percentage, not a distance)
 - size_pct: position size as a percentage of portfolio equity (e.g. 8.5 means 8.5%)
@@ -105,8 +115,17 @@ Only include values you can actually read — use null for anything not visible 
 Return [] for pure chart images (candlestick charts, breadth indicators) with no position rows.
 
 Return ONLY valid JSON, no markdown:
-[{"ticker": "NVDA", "action": "LONG", "entry": 211.66, "stop": 195.0, "size_pct": 8.5, "trim_1": 240.0, "trim_2": 270.0, "trim_3": null, "notes": null}]
+[{{"ticker": "NVDA", "action": "LONG", "entry_date": "2026-05-14", "entry": 211.66, "stop": 195.0, "size_pct": 8.5, "trim_1": 240.0, "trim_2": 270.0, "trim_3": null, "notes": null}}]
 """
+
+
+def _vision_prompt(context_date=None) -> str:
+    """Fill in the newsletter date so the model can resolve year-less entry dates."""
+    date_ctx = (
+        f"\n  This newsletter is dated {context_date}; every entry date is on or before it."
+        if context_date else ""
+    )
+    return _VISION_PROMPT.format(date_ctx=date_ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -126,16 +145,17 @@ def extract_from_text(text: str, client) -> dict:
     return _parse_json(resp.content[0].text, fallback={})
 
 
-def extract_from_images(images: list[tuple[str, str]], client) -> list[dict]:
+def extract_from_images(images: list[tuple[str, str]], client, context_date=None) -> list[dict]:
     """
     Extract trade tables from images using Claude Haiku vision.
     images: list of (base64_data, media_type) tuples.
+    context_date: the newsletter date, used to resolve year-less entry dates.
     Returns flat list of trade row dicts. Per-image failures are logged and
     skipped (used in the bulk newsletter run where some images are charts).
     """
     results = []
     for b64_data, media_type in images:
-        rows, err = extract_one_image(b64_data, media_type, client)
+        rows, err = extract_one_image(b64_data, media_type, client, context_date)
         if err:
             # Don't kill the whole run for one bad image, but make it visible.
             print(f"[vision] image skipped: {err}")
@@ -144,7 +164,7 @@ def extract_from_images(images: list[tuple[str, str]], client) -> list[dict]:
 
 
 def extract_one_image(
-    b64_data: str, media_type: str, client
+    b64_data: str, media_type: str, client, context_date=None
 ) -> tuple[list[dict], str | None]:
     """
     Run vision extraction on a single image.
@@ -177,7 +197,7 @@ def extract_one_image(
                             "data": b64_data,
                         },
                     },
-                    {"type": "text", "text": _VISION_PROMPT},
+                    {"type": "text", "text": _vision_prompt(context_date)},
                 ],
             }],
         )
