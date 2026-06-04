@@ -239,7 +239,13 @@ class NewsletterPick(Base):
     source_section   = Column(String(50))      # focus_list/portfolio/portfolio_table/scan_21dma/ep_list/stalklist
     created_at       = Column(DateTime, default=datetime.utcnow)
 
-    __table_args__ = (UniqueConstraint("email_date", "ticker", "action", "source_section",
+    # entry_price is in the key so Alex can hold several positions in the same
+    # ticker (scaled in at different prices) without them colliding.
+    # The live DB constraint uses NULLS NOT DISTINCT (see migration
+    # newsletter_picks_multi_position.sql); SQLAlchemy can't express that flag,
+    # so this declaration is for ORM awareness/metadata only.
+    __table_args__ = (UniqueConstraint("email_date", "ticker", "action",
+                                       "source_section", "entry_price",
                                        name="uq_newsletter_pick"),)
 
 

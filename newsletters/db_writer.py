@@ -155,21 +155,23 @@ def write_newsletter(
     other_picks     = [p for p in picks if p["source_section"] != "portfolio_table"]
 
     if portfolio_picks:
-        # A single batch upsert cannot touch the same conflict key twice
-        # (Postgres: "ON CONFLICT DO UPDATE command cannot affect row a second
-        # time"). A screenshot can yield the same ticker/action twice, so
-        # collapse to one row per key, keeping the last (vision takes precedence
-        # over the text-extracted portfolio_table appended earlier).
+        # entry_price is part of the conflict key: Alex can hold several
+        # positions in the same ticker (scaled in on different dates/prices), so
+        # they are distinct rows and must NOT be collapsed. We still dedupe by
+        # the *full* key — including entry_price — because a single batch upsert
+        # cannot touch the same conflict key twice (Postgres: "ON CONFLICT DO
+        # UPDATE command cannot affect row a second time"); only genuinely
+        # identical rows (same entry) collapse, last wins.
         portfolio_picks = _dedupe_by_conflict_key(portfolio_picks)
         client.table("newsletter_picks").upsert(
             portfolio_picks,
-            on_conflict="email_date,ticker,action,source_section",
+            on_conflict="email_date,ticker,action,source_section,entry_price",
         ).execute()
 
     if other_picks:
         client.table("newsletter_picks").upsert(
             other_picks,
-            on_conflict="email_date,ticker,action,source_section",
+            on_conflict="email_date,ticker,action,source_section,entry_price",
             ignore_duplicates=True,
         ).execute()
 
@@ -177,10 +179,15 @@ def write_newsletter(
 
 
 def _dedupe_by_conflict_key(rows: list[dict]) -> list[dict]:
-    """Keep one row per (email_date, ticker, action, source_section); last wins."""
+    """Keep one row per (email_date, ticker, action, source_section, entry_price); last wins.
+
+    entry_price is in the key so two distinct positions in the same ticker (different
+    entries) are preserved — only exact duplicates of the same position collapse.
+    """
     by_key: dict[tuple, dict] = {}
     for r in rows:
-        key = (r.get("email_date"), r.get("ticker"), r.get("action"), r.get("source_section"))
+        key = (r.get("email_date"), r.get("ticker"), r.get("action"),
+               r.get("source_section"), r.get("entry_price"))
         by_key[key] = r
     return list(by_key.values())
 
