@@ -114,7 +114,7 @@ def run_portfolio_image(
     """
     import base64
     from datetime import date as _date, datetime as _datetime
-    from newsletters.claude_extractor import extract_one_image
+    from newsletters.claude_extractor import extract_one_image, _VISION_MODEL_ACCURATE
     from newsletters.db_writer import write_newsletter
 
     if isinstance(email_date, str):
@@ -122,7 +122,11 @@ def run_portfolio_image(
 
     client = _make_client()
     b64 = base64.b64encode(image_data).decode()
-    trades, err = extract_one_image(b64, media_type, client, context_date=email_date)
+    # Manual upload: rare, accuracy-critical (dense portfolio table). Use the
+    # stronger model — Haiku misreads small digits here; Sonnet reads it cleanly.
+    trades, err = extract_one_image(
+        b64, media_type, client, context_date=email_date, model=_VISION_MODEL_ACCURATE
+    )
     if not trades:
         return False, err or "No portfolio table found in this image — make sure it shows tickers, entry prices and stops."
 

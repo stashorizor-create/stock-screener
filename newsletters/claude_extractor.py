@@ -15,6 +15,13 @@ import re
 _VISION_MAX_EDGE = 1568
 _MAX_IMAGE_BYTES = 4_500_000  # Anthropic rejects images above ~5 MB; stay clear.
 
+# Haiku is cheap and used for the automated nightly run (mostly charts that
+# return nothing). Manual screenshot uploads use Sonnet: a portfolio table has
+# dense small digits where Haiku misreads ~7 values/tickers per table, while
+# Sonnet reads it cleanly for ~2.6c per upload (a rare, manual action).
+_VISION_MODEL_FAST     = "claude-haiku-4-5"
+_VISION_MODEL_ACCURATE = "claude-sonnet-4-6"
+
 
 # ---------------------------------------------------------------------------
 # Prompts
@@ -88,34 +95,35 @@ NEWSLETTER TEXT:
 """
 
 _VISION_PROMPT = """\
-This image is from a swing trading newsletter and may contain a portfolio positions table.
+This image is from the PrimeTrading "SWING PORTFOLIO" newsletter and usually contains a
+table of open stock positions.
 
-If the image contains a table with rows of stock positions (each row has a ticker symbol \
-and numeric price/metric columns), extract every row.
+If the image shows a table with rows of stock positions (each row has a ticker and numeric
+columns), extract EVERY row. The SAME ticker can appear on several rows — those are separate
+scaled-in positions, so include each one as its own object; do not merge them.
 
-For each row read these fields:
-- ticker: the stock symbol (e.g. NVDA, TSLA)
-- action: LONG or SHORT (default LONG if column not present)
-- entry_date: the date this position was entered, read from the row's date column,
-  returned as YYYY-MM-DD. The same ticker may appear on several rows with different
-  entry dates (Alex scales in over time) — read each row's own date.{date_ctx}
-  If a row shows only a month and day with no year, choose the most recent year that
-  makes the date fall on or before the newsletter date above.
-  If the row has no entry-date column or the date is unreadable, use null.
-  NEVER invent, guess, or approximate a date — null is correct when unsure.
-- entry: entry price as an absolute dollar number
-- stop: stop loss as an absolute dollar price (not a percentage, not a distance)
-- size_pct: position size as a percentage of portfolio equity (e.g. 8.5 means 8.5%)
-- trim_1: first partial exit target price (absolute dollar amount)
-- trim_2: second partial exit target price
-- trim_3: third partial exit target price
-- notes: any brief note visible in the row
+Alex's columns map to the fields below (his column headers are in quotes):
+- ticker: the "Ticker" column (e.g. NVDA, INTC)
+- action: the "Side" column — LONG or SHORT (default LONG)
+- entry_date: the "Date" column — the date this position was entered. It is shown as
+  month/day with NO year (e.g. "6/1", "5/20", "4/13"). Return it as YYYY-MM-DD.{date_ctx}
+  Choose the most recent year that makes the date fall on or before the newsletter date.
+  NEVER invent or guess — use null only if the cell is genuinely blank or unreadable.
+- entry: the "Entry" column — entry price in dollars (e.g. 107.68). Do NOT use the
+  "Initial entry" column, which is a percentage, not a price.
+- stop: the "SL (21dma-low)" column — stop price in dollars.
+- size_pct: the "Weight" column — position size as a percent of equity (e.g. 9.8 means 9.8%).
+  Do NOT use the "Trimmed" column for this.
+- trim_1, trim_2, trim_3: the "Trim #1", "Trim #2", "Trim #3" columns — partial exit target
+  prices in dollars. Use null for any that are blank.
+- notes: null. Ignore the remaining columns (Industry, Trimmed, Trim #4, Secured Profits,
+  Open Heat, Total R, EC %, Avrg P&L, Initial entry).
 
-Only include values you can actually read — use null for anything not visible or unclear.
+Only include values you can actually read — use null for anything blank or unclear.
 Return [] for pure chart images (candlestick charts, breadth indicators) with no position rows.
 
 Return ONLY valid JSON, no markdown:
-[{{"ticker": "NVDA", "action": "LONG", "entry_date": "2026-05-14", "entry": 211.66, "stop": 195.0, "size_pct": 8.5, "trim_1": 240.0, "trim_2": 270.0, "trim_3": null, "notes": null}}]
+[{{"ticker": "INTC", "action": "LONG", "entry_date": "2026-06-01", "entry": 107.68, "stop": 105.74, "size_pct": 9.8, "trim_1": 111.34, "trim_2": null, "trim_3": null, "notes": null}}]
 """
 
 
@@ -145,17 +153,19 @@ def extract_from_text(text: str, client) -> dict:
     return _parse_json(resp.content[0].text, fallback={})
 
 
-def extract_from_images(images: list[tuple[str, str]], client, context_date=None) -> list[dict]:
+def extract_from_images(images: list[tuple[str, str]], client, context_date=None,
+                        model: str = _VISION_MODEL_FAST) -> list[dict]:
     """
-    Extract trade tables from images using Claude Haiku vision.
+    Extract trade tables from images using Claude vision.
     images: list of (base64_data, media_type) tuples.
     context_date: the newsletter date, used to resolve year-less entry dates.
+    model: defaults to the cheap Haiku model for the automated bulk run.
     Returns flat list of trade row dicts. Per-image failures are logged and
     skipped (used in the bulk newsletter run where some images are charts).
     """
     results = []
     for b64_data, media_type in images:
-        rows, err = extract_one_image(b64_data, media_type, client, context_date)
+        rows, err = extract_one_image(b64_data, media_type, client, context_date, model)
         if err:
             # Don't kill the whole run for one bad image, but make it visible.
             print(f"[vision] image skipped: {err}")
@@ -164,7 +174,8 @@ def extract_from_images(images: list[tuple[str, str]], client, context_date=None
 
 
 def extract_one_image(
-    b64_data: str, media_type: str, client, context_date=None
+    b64_data: str, media_type: str, client, context_date=None,
+    model: str = _VISION_MODEL_FAST,
 ) -> tuple[list[dict], str | None]:
     """
     Run vision extraction on a single image.
@@ -184,7 +195,7 @@ def extract_one_image(
 
     try:
         resp = client.messages.create(
-            model="claude-haiku-4-5",
+            model=model,
             max_tokens=4096,
             messages=[{
                 "role": "user",
