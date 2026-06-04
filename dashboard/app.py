@@ -1166,10 +1166,11 @@ with st.sidebar:
             _tv_exch = _TV_EXCH.get(_s.get("exchange", ""), _s.get("exchange", ""))
             _tv_lines.append(f"{_tv_exch}:{_s['symbol']}" if _tv_exch else _s["symbol"])
             _seen_syms.add(_s["symbol"])
+    _tv_suffix = "_US" if region_filter == "US" else ""
     st.download_button(
         "📥 TradingView watchlist",
         data="\n".join(_tv_lines),
-        file_name=f"watchlist_{_run_date}.txt",
+        file_name=f"watchlist_{_run_date}{_tv_suffix}.txt",
         mime="text/plain",
         use_container_width=True,
         help="Import in TradingView: Watchlists → ··· → Import list",
