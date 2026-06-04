@@ -165,7 +165,7 @@ def extract_one_image(
     try:
         resp = client.messages.create(
             model="claude-haiku-4-5",
-            max_tokens=800,
+            max_tokens=4096,
             messages=[{
                 "role": "user",
                 "content": [
@@ -266,7 +266,46 @@ def _parse_json(text: str, fallback):
             return json.loads(candidate)
         except json.JSONDecodeError:
             pass
+    # Last resort: the array was truncated mid-row (hit the token cap). Recover
+    # whatever complete {...} objects we can so the user still gets those rows.
+    salvaged = _salvage_objects(text)
+    if salvaged:
+        return salvaged
     return fallback
+
+
+def _salvage_objects(text: str) -> list:
+    """Pull every complete top-level {...} object out of a (possibly truncated) array."""
+    objs = []
+    depth = 0
+    in_str = False
+    esc = False
+    start = -1
+    for i, ch in enumerate(text):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            if depth > 0:
+                depth -= 1
+                if depth == 0 and start != -1:
+                    try:
+                        objs.append(json.loads(text[start:i + 1]))
+                    except json.JSONDecodeError:
+                        pass
+                    start = -1
+    return objs
 
 
 def _extract_json_blob(text: str) -> str | None:
