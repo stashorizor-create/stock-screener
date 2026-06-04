@@ -35,8 +35,15 @@ def write_newsletter(
     vision_trades: list[dict],
     raw_text: str,
     dry_run: bool = False,
+    replace_portfolio: bool = False,
 ) -> None:
-    """Upsert one newsletter into newsletter_market + newsletter_picks."""
+    """Upsert one newsletter into newsletter_market + newsletter_picks.
+
+    replace_portfolio: if True, delete this date's existing portfolio_table rows
+    before writing — full-replace semantics so a re-uploaded screenshot reflects
+    the current positions exactly (old/closed positions disappear instead of
+    piling up). Used by the manual screenshot upload.
+    """
 
     stance       = (extracted.get("market_stance") or "unknown").lower()
     notes        = extracted.get("market_notes") or ""
@@ -147,6 +154,16 @@ def write_newsletter(
         "raw_text":         raw_text[:10000],
         "processed_at":     datetime.utcnow().isoformat(),
     }, on_conflict="email_date").execute()
+
+    # Full-replace the portfolio snapshot for this date (manual re-upload): clear
+    # old portfolio_table rows first so removed/closed positions don't linger.
+    # Only touches portfolio_table — focus/scan/ep/stalk rows are left intact.
+    if replace_portfolio:
+        client.table("newsletter_picks") \
+            .delete() \
+            .eq("email_date", str(email_date)) \
+            .eq("source_section", "portfolio_table") \
+            .execute()
 
     if not picks:
         logger.info("Wrote newsletter %s: no picks", email_date)

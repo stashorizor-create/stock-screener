@@ -1770,26 +1770,37 @@ def _render_newsletter_page(sel_date: str | None = None):
 
             # ── EMA21 cloud chart with trade levels ──────────────────────────────
             st.markdown("---")
-            _tickers_with_entry = [p["ticker"] for p in _pt_picks if p.get("entry_price")]
-            if _tickers_with_entry:
+            _positions_with_entry = [p for p in _pt_picks if p.get("entry_price")]
+            _entry_tickers = sorted({p["ticker"] for p in _positions_with_entry})
+            if _positions_with_entry:
                 with st.spinner("Loading chart data…"):
-                    _port_ohlcv = compute_watchlist_ohlcv(tuple(sorted(_tickers_with_entry)))
+                    _port_ohlcv = compute_watchlist_ohlcv(tuple(_entry_tickers))
 
-                _port_chart_opts = [tk for tk in _tickers_with_entry
-                                    if _port_ohlcv.get(tk, {}).get("df")]
-                if not _port_chart_opts:
-                    _pt_failed = [tk for tk in _tickers_with_entry if not _port_ohlcv.get(tk, {}).get("df")]
+                # Each scaled-in position is charted on its own. A ticker Alex
+                # added to appears once per entry (distinct entry date/price),
+                # never merged into a single combined position.
+                _chartable = [p for p in _positions_with_entry
+                              if _port_ohlcv.get(p["ticker"], {}).get("df")]
+                if not _chartable:
+                    _pt_failed = sorted({p["ticker"] for p in _positions_with_entry
+                                         if not _port_ohlcv.get(p["ticker"], {}).get("df")})
                     st.caption(f"No chart data — Borsdata could not find: {', '.join(_pt_failed)}")
                 else:
-                    _port_sel = st.selectbox(
+                    def _pos_label(i):
+                        _p  = _chartable[i]
+                        _sc = _port_ohlcv[_p["ticker"]]["score"]["total"]
+                        _dt = _p.get("entry_date") or "?"
+                        return f"{_p['ticker']}  {_dt}  @ ${_p['entry_price']:.2f}  (21D {_sc:.0f})"
+                    _pos_idx = st.selectbox(
                         "Select position to chart",
-                        _port_chart_opts,
+                        range(len(_chartable)),
                         key="port_chart_sel",
-                        format_func=lambda t: f"{t}  (21D score {_port_ohlcv[t]['score']['total']:.0f})",
+                        format_func=_pos_label,
                     )
+                    _pick     = _chartable[_pos_idx]
+                    _port_sel = _pick["ticker"]
                     if _port_sel:
                         _ohlcv_recs = _port_ohlcv[_port_sel]["df"]
-                        _pick       = next((p for p in _pt_picks if p["ticker"] == _port_sel), {})
 
                         from plotly.subplots import make_subplots as _msp2
                         import pandas as _pd3
@@ -1867,7 +1878,8 @@ def _render_newsletter_page(sel_date: str | None = None):
                                 annotation_font_color=color, annotation_font_size=10,
                             )
                         _port_hline(_pick.get("entry_price"), "#388bfd", "Entry")
-                        _port_hline(_pick.get("stop_price"),  "#f85149", "Stop")
+                        # Stop line intentionally omitted — Alex trails it up over the
+                        # following days, so a static stop line is misleading on the chart.
                         _port_hline(_pick.get("target_price"), "#3fb950", "T1")
                         _port_hline(_pick.get("trim_2"),       "#58a6ff", "T2")
                         _port_hline(_pick.get("trim_3"),       "#a371f7", "T3")

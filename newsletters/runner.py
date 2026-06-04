@@ -137,6 +137,7 @@ def run_portfolio_image(
         vision_trades=trades,
         raw_text="",
         dry_run=dry_run,
+        replace_portfolio=True,  # new upload replaces the date's positions wholesale
     )
     tickers = ", ".join(t.get("ticker", "?") for t in trades if t.get("ticker"))
     return True, f"Extracted {len(trades)} position(s): {tickers}"
