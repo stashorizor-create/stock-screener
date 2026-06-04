@@ -2,7 +2,12 @@ name: Nightly Pipeline
 
 on:
   schedule:
-    - cron: '0 1 * * *'   # 01:00 UTC = 02:00 CET / 03:00 CEST — after Borsdata EOD batch
+    # 06:00 UTC = 08:00 CEST. Borsdata's Nordic EOD lands the prior evening, but its
+    # GLOBAL/US batch is published later in the European morning (the US session closes
+    # 22:00 CEST and is not in Borsdata by 03:00 CEST). Running at 06:00 UTC clears the
+    # global batch yet stays before Nordic open (07:00 UTC), so Nordic keeps its prior
+    # complete session. run.py also aborts if US data is still behind Nordic.
+    - cron: '0 6 * * *'
   workflow_dispatch:        # allow manual trigger from GitHub Actions tab
 
 jobs:

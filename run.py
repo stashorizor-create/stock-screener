@@ -94,6 +94,8 @@ def parse_args() -> argparse.Namespace:
                    help="Market region to run (default: nordic)")
     p.add_argument("--from-checkpoint",  default="",  metavar="FILE",
                    help="Path to pipeline_YYYY-MM-DD.json — skip pipeline, retry DB write only")
+    p.add_argument("--skip-freshness-check", action="store_true",
+                   help="Skip the US-vs-Nordic data freshness guard (use on US market holidays)")
     return p.parse_args()
 
 
@@ -115,6 +117,69 @@ def _json_default(obj):
     if isinstance(obj, np.ndarray):
         return obj.tolist()
     raise TypeError(f"Not JSON serializable: {type(obj)}")
+
+
+def _latest_bar_date(instruments_df, market_ids: set[int], prefer: list[str]):
+    """Return the latest Borsdata bar date for a liquid reference instrument in a region.
+
+    Picks the first ticker in `prefer` that exists in instruments_df for the given
+    market_ids (falling back to any instrument there), then reads its most recent bar.
+    Returns a date or None if it can't be determined.
+    """
+    pool = instruments_df[instruments_df["marketId"].isin(market_ids)]
+    if pool.empty:
+        return None
+    ref = None
+    for tk in prefer:
+        m = pool[pool["ticker"].astype(str).str.upper() == tk.upper()]
+        if not m.empty:
+            ref = m.iloc[0]
+            break
+    if ref is None:
+        ref = pool.iloc[0]
+    try:
+        px = borsdata.get_ohlcv(int(ref["insId"]), from_date=date.today() - timedelta(days=10))
+        if px.empty:
+            return None
+        last = px["date"].iloc[-1]
+        return last.date() if hasattr(last, "date") else last
+    except Exception as exc:
+        logger.warning("Freshness probe failed for %s: %s", ref.get("ticker"), exc)
+        return None
+
+
+def check_data_freshness(instruments_df, needs_nordic: bool, needs_global: bool,
+                         skip: bool = False) -> None:
+    """Abort the run if Borsdata's US/global session is staler than its Nordic session.
+
+    Borsdata publishes the US/global EOD batch later than Nordic, so an early run can
+    pick up a day-old US session while Nordic is current. We only compare when both
+    regions are in the run. On US market holidays US legitimately lags Nordic — pass
+    --skip-freshness-check to force the run then.
+    """
+    if not (needs_nordic and needs_global):
+        return
+
+    nordic_ids = NORDIC_MARKET_IDS
+    global_ids = {32, 33}  # NYSE, NASDAQ
+    nordic_latest = _latest_bar_date(instruments_df, nordic_ids, ["EQNR", "DNB", "VOLV B", "NOVO B"])
+    us_latest     = _latest_bar_date(instruments_df, global_ids, ["NVDA", "AAPL", "MSFT"])
+
+    logger.info("Data freshness — latest bar: US=%s  Nordic=%s", us_latest, nordic_latest)
+    if not us_latest or not nordic_latest:
+        logger.warning("Freshness check inconclusive (missing reference data) — proceeding.")
+        return
+
+    if us_latest < nordic_latest:
+        msg = (f"US data is stale: latest US bar {us_latest} is behind Nordic {nordic_latest}. "
+               f"Borsdata's global EOD batch has likely not published yet — re-run later.")
+        if skip:
+            logger.warning("%s  (continuing: --skip-freshness-check)", msg)
+        else:
+            logger.error(msg)
+            logger.error("Aborting before the paid AI/screening pass. "
+                         "If today is a US market holiday, re-run with --skip-freshness-check.")
+            sys.exit(1)
 
 
 def _print_summary(raw_signals: list[dict], ai_results: dict) -> None:
@@ -304,6 +369,10 @@ def main() -> None:
         instruments_df = instruments_df.head(args.limit)
 
     logger.info("%d instruments to process", len(instruments_df))
+
+    # Fail fast (before any paid AI work) if Borsdata's US batch hasn't published yet.
+    check_data_freshness(instruments_df, needs_nordic, needs_global,
+                         skip=args.skip_freshness_check)
 
     # ------------------------------------------------------------------
     # 2. OHLCV pass — Stage 2 filter + collect RS inputs
