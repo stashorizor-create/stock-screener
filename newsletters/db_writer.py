@@ -155,6 +155,12 @@ def write_newsletter(
     other_picks     = [p for p in picks if p["source_section"] != "portfolio_table"]
 
     if portfolio_picks:
+        # A single batch upsert cannot touch the same conflict key twice
+        # (Postgres: "ON CONFLICT DO UPDATE command cannot affect row a second
+        # time"). A screenshot can yield the same ticker/action twice, so
+        # collapse to one row per key, keeping the last (vision takes precedence
+        # over the text-extracted portfolio_table appended earlier).
+        portfolio_picks = _dedupe_by_conflict_key(portfolio_picks)
         client.table("newsletter_picks").upsert(
             portfolio_picks,
             on_conflict="email_date,ticker,action,source_section",
@@ -168,6 +174,15 @@ def write_newsletter(
         ).execute()
 
     logger.info("Wrote newsletter %s: %d picks", email_date, len(picks))
+
+
+def _dedupe_by_conflict_key(rows: list[dict]) -> list[dict]:
+    """Keep one row per (email_date, ticker, action, source_section); last wins."""
+    by_key: dict[tuple, dict] = {}
+    for r in rows:
+        key = (r.get("email_date"), r.get("ticker"), r.get("action"), r.get("source_section"))
+        by_key[key] = r
+    return list(by_key.values())
 
 
 def _clean_ticker(raw) -> str | None:
