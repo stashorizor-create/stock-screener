@@ -855,25 +855,23 @@ def get_track_record() -> dict:
 
 @st.cache_data(ttl=600, show_spinner=False)
 def get_watchlist_tickers(email_date: str) -> list[dict]:
-    """Get watchlist tickers (scan_21dma, focus_list, stalklist) for a newsletter date."""
+    """Get watchlist picks for the four newsletter sections, as full lists.
+
+    Returns one row per (ticker, section) — a ticker may appear in several sections
+    (Alex's lists overlap heavily), and we show it in each so the sections mirror the
+    newsletter. `notes` carries the theme name for themes_setup rows.
+    """
     client, err = _supa_client()
     if err or client is None:
         return []
     try:
         r = (client.table("newsletter_picks")
-             .select("ticker,source_section,action")
+             .select("ticker,source_section,action,notes")
              .eq("email_date", email_date)
-             .in_("source_section", ["scan_21dma", "focus_list", "stalklist"])
+             .in_("source_section",
+                  ["focus_list", "top_setups", "themes_setup", "scan_21dma"])
              .execute())
-        picks = r.data or []
-        # Deduplicate by ticker, keeping highest-priority section
-        priority = {"scan_21dma": 0, "focus_list": 1, "stalklist": 2}
-        seen: dict[str, dict] = {}
-        for p in picks:
-            t = p["ticker"]
-            if t not in seen or priority.get(p["source_section"], 9) < priority.get(seen[t]["source_section"], 9):
-                seen[t] = p
-        return list(seen.values())
+        return r.data or []
     except Exception:
         return []
 
@@ -1407,8 +1405,7 @@ def _render_newsletter_page(sel_date: str | None = None):
         if not _wl_picks:
             st.info("No watchlist entries for this newsletter — upload the latest newsletter to populate.")
         else:
-            _wl_tickers = tuple(sorted(p["ticker"] for p in _wl_picks))
-            _wl_section = {p["ticker"]: p["source_section"] for p in _wl_picks}
+            _wl_tickers = tuple(sorted({p["ticker"] for p in _wl_picks}))  # unique → OHLCV
 
             with st.spinner(f"Loading OHLCV for {len(_wl_tickers)} tickers…"):
                 _wl_data = compute_watchlist_ohlcv(_wl_tickers)
@@ -1416,46 +1413,60 @@ def _render_newsletter_page(sel_date: str | None = None):
             # Screener lookup: {symbol → composite_score}
             _screener_map = {s["symbol"].upper(): s["composite_score"] for s in ALL_SIGNALS}
 
-            _SECTION_ORDER = ["scan_21dma", "focus_list", "stalklist"]
+            _SECTION_ORDER = ["focus_list", "top_setups", "themes_setup", "scan_21dma"]
             _SECTION_TITLE = {
-                "scan_21dma": "21EMA Zone — Top Setups",
-                "focus_list": "Focus List — Top Ideas",
-                "stalklist":  "Stalk List — Liquid Leaders",
+                "focus_list":   "Focus List — Top Ideas",
+                "top_setups":   "Top Setups @ 21dma Structure",
+                "themes_setup": "Themes Setting Up",
+                "scan_21dma":   "Liquid Leaders 21dma Pullback Scan",
             }
             _SECTION_COLOR = {
-                "scan_21dma": "#e3b341",
-                "focus_list": "#388bfd",
-                "stalklist":  "#58a6ff",
+                "focus_list":   "#388bfd",
+                "top_setups":   "#e3b341",
+                "themes_setup": "#3fb950",
+                "scan_21dma":   "#58a6ff",
             }
 
-            # Build scored rows grouped by section
+            # Build scored rows grouped by section, one row per pick (tickers may repeat
+            # across sections — that's intentional, the lists mirror the newsletter).
             _grouped: dict[str, list] = {s: [] for s in _SECTION_ORDER}
-            for tk in _wl_tickers:
-                d   = _wl_data.get(tk, {})
-                sc  = d.get("score", {})
-                sec = _wl_section.get(tk, "")
-                if sec in _grouped:
-                    _grouped[sec].append({
-                        "ticker":      tk,
-                        "section":     sec,
-                        "alex_score":  sc.get("total", 0),
-                        "score_data":  sc,
-                        "in_screener": tk in _screener_map,
-                        "comp_score":  _screener_map.get(tk),
-                        "has_data":    d.get("df") is not None,
-                    })
+            for p in _wl_picks:
+                sec = p.get("source_section", "")
+                if sec not in _grouped:
+                    continue
+                tk = p["ticker"]
+                d  = _wl_data.get(tk, {})
+                sc = d.get("score", {})
+                _grouped[sec].append({
+                    "ticker":      tk,
+                    "section":     sec,
+                    "theme":       (p.get("notes") or "") if sec == "themes_setup" else "",
+                    "alex_score":  sc.get("total", 0),
+                    "score_data":  sc,
+                    "in_screener": tk in _screener_map,
+                    "comp_score":  _screener_map.get(tk),
+                    "has_data":    d.get("df") is not None,
+                })
             for sec in _SECTION_ORDER:
-                _grouped[sec].sort(key=lambda r: r["alex_score"], reverse=True)
+                if sec == "themes_setup":
+                    # Keep Alex's theme grouping; within a theme sort by 21D score.
+                    _grouped[sec].sort(key=lambda r: (r["theme"], -r["alex_score"]))
+                else:
+                    _grouped[sec].sort(key=lambda r: r["alex_score"], reverse=True)
 
             _all_rows = [r for sec in _SECTION_ORDER for r in _grouped[sec]]
-            _total = len(_all_rows)
+            _total = len(_wl_tickers)  # unique tickers (entries may exceed this)
 
             # Header + TradingView export (current newsletter, section order)
             _scrn_exch_map = {s["symbol"].upper(): s.get("exchange", "") for s in ALL_SIGNALS}
             _nl_tv_lines: list[str] = []
+            _tv_seen: set[str] = set()  # tickers repeat across sections — export once
             for sec in _SECTION_ORDER:
                 for row in _grouped[sec]:
                     _t = row["ticker"].upper()
+                    if _t in _tv_seen:
+                        continue
+                    _tv_seen.add(_t)
                     _exch = _scrn_exch_map.get(_t, "")
                     _tv_exch = _TV_EXCH.get(_exch, "")
                     _nl_tv_lines.append(f"{_tv_exch}:{_t}" if _tv_exch else _t)
@@ -1507,7 +1518,17 @@ def _render_newsletter_page(sel_date: str | None = None):
                     f'{sec_title} &nbsp;·&nbsp; {len(sec_rows)}</span></div>',
                     unsafe_allow_html=True,
                 )
+                _cur_theme = None
                 for row in sec_rows:
+                    # Themes Setting Up: print a sub-header each time the theme changes.
+                    if sec == "themes_setup" and row["theme"] != _cur_theme:
+                        _cur_theme = row["theme"]
+                        if _cur_theme:
+                            st.markdown(
+                                f'<div style="color:{sec_color};font-size:10.5px;font-weight:600;'
+                                f'margin:6px 0 2px;padding-left:10px;opacity:0.85">{_cur_theme}</div>',
+                                unsafe_allow_html=True,
+                            )
                     tk  = row["ticker"]
                     sc  = row["score_data"]
                     alx = row["alex_score"]
@@ -1554,11 +1575,12 @@ def _render_newsletter_page(sel_date: str | None = None):
 
             # Cloud chart for selected ticker
             st.markdown("---")
-            _chart_options = [tk for tk in [r["ticker"] for r in _all_rows] if _wl_data.get(tk, {}).get("df")]
-            _failed = [r["ticker"] for r in _all_rows if not _wl_data.get(r["ticker"], {}).get("df")]
+            _uniq_tickers = list(dict.fromkeys(r["ticker"] for r in _all_rows))  # dedupe across sections
+            _chart_options = [tk for tk in _uniq_tickers if _wl_data.get(tk, {}).get("df")]
+            _failed = [tk for tk in _uniq_tickers if not _wl_data.get(tk, {}).get("df")]
             if _chart_options:
                 if _failed:
-                    st.caption(f"Charts loaded for {len(_chart_options)}/{len(_all_rows)} tickers · no Borsdata data for: {', '.join(_failed)}")
+                    st.caption(f"Charts loaded for {len(_chart_options)}/{len(_uniq_tickers)} tickers · no Borsdata data for: {', '.join(_failed)}")
                 _sel = st.selectbox(
                     "Select ticker to view cloud chart",
                     _chart_options, key="wl_chart_sel",

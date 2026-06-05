@@ -75,6 +75,31 @@ def write_newsletter(
                 "source_section": "portfolio",
             })
 
+    # "TOP SETUPS @ 21dma-structure area" — ranked names; Alex's score kept in notes.
+    for item in extracted.get("top_setups") or []:
+        if isinstance(item, dict):
+            ticker = _clean_ticker(item.get("ticker"))
+            score  = item.get("score")
+        else:
+            ticker, score = _clean_ticker(item), None
+        if ticker:
+            picks.append({"email_date": str(email_date), "ticker": ticker,
+                          "action": "WATCH", "source_section": "top_setups",
+                          "notes": (f"Alex {score}" if score is not None else None)})
+
+    # "THEMES SETTING UP" — grouped by theme; theme name stored in notes for display.
+    for grp in extracted.get("themes_setting_up") or []:
+        if not isinstance(grp, dict):
+            continue
+        theme = (grp.get("theme") or "").strip()
+        for raw in grp.get("tickers") or []:
+            ticker = _clean_ticker(raw)
+            if ticker:
+                picks.append({"email_date": str(email_date), "ticker": ticker,
+                              "action": "WATCH", "source_section": "themes_setup",
+                              "notes": theme or None})
+
+    # "Liquid Leaders 21dma-structure Pullback scan (LONG)"
     for raw in extracted.get("scan_21dma") or []:
         ticker = _clean_ticker(raw)
         if ticker:
@@ -86,12 +111,6 @@ def write_newsletter(
         if ticker:
             picks.append({"email_date": str(email_date), "ticker": ticker,
                           "action": "EP", "source_section": "ep_list"})
-
-    for raw in extracted.get("stalk_list") or []:
-        ticker = _clean_ticker(raw)
-        if ticker:
-            picks.append({"email_date": str(email_date), "ticker": ticker,
-                          "action": "STALK", "source_section": "stalklist"})
 
     # Portfolio table from text extraction (used when vision finds nothing)
     # Vision trades take precedence — collected below will overwrite via upsert

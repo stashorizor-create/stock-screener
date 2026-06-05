@@ -58,9 +58,14 @@ Schema:
   "portfolio_moves": [
     {"ticker": "ARM", "action": "TRIM|OUT|ADDED|NEW|HOLD", "notes": "optional"}
   ],
+  "top_setups": [
+    {"ticker": "ASML", "score": 100}
+  ],
+  "themes_setting_up": [
+    {"theme": "Optical Components", "tickers": ["CIEN", "GLW", "VIAV"]}
+  ],
   "scan_21dma": ["TICKER1", "TICKER2"],
-  "ep_list": ["TICKER1", "TICKER2"],
-  "stalk_list": ["TICKER1", "TICKER2"]
+  "ep_list": ["TICKER1", "TICKER2"]
 }
 
 Rules:
@@ -84,10 +89,17 @@ Rules:
   scan, and do NOT include the broad "Liquid Leaders Universe (top RS)" list here.
   Return [] if the LONG scan is absent or shows "None".
 - IMPORTANT: do NOT extract the broad "Liquid Leaders Universe (top RS)" list into
-  scan_21dma, stalk_list, or any other field — leave it out entirely.
-- stalk_list / ep_list: only populate these from sections explicitly labelled as a
-  stalk list or an Episodic Pivot (EP) list of individual tickers. Leave them [] if
-  no such dedicated section exists.
+  scan_21dma, top_setups, themes_setting_up, ep_list, or any other field — leave it
+  out entirely.
+- top_setups: the tickers under the heading "TOP SETUPS @ 21dma-structure area".
+  Each line looks like "$ASML 100 — Semiconductor Equipment": capture the ticker and
+  the leading number as `score`. Return [] if that heading is absent.
+- themes_setting_up: the groups under the heading "THEMES SETTING UP". Each line names
+  a theme then its tickers, e.g. "Optical Components — $CIEN, $GLW, $VIAV all setting
+  up". Return one object per theme: {"theme": <name>, "tickers": [...]}. Capture every
+  ticker named in the group. Return [] if that heading is absent.
+- ep_list: only the tickers under "Liquid Leaders Episodic Pivot (EP)". Return [] if it
+  shows "None" or is absent.
 - Use null for any section not present in the newsletter
 - If a ticker appears in multiple sections, include it in all relevant sections
 
@@ -145,9 +157,13 @@ def extract_from_text(text: str, client) -> dict:
     # Send the whole newsletter (capped generously). The Liquid Leaders / 21dma
     # pullback scan sections sit ~9-11k chars in, so an 8k cap silently dropped
     # them — the actionable watchlist lists never reached the model.
+    # max_tokens must comfortably exceed the full JSON: Alex's pullback scan alone
+    # runs 35+ tickers, plus focus_list, top_setups, themes_setting_up and the
+    # portfolio table. At 1500 the response was cut mid-array, so only the tickers
+    # early in the JSON survived ("some stocks from each section").
     resp = client.messages.create(
         model="claude-haiku-4-5",
-        max_tokens=1500,
+        max_tokens=4096,
         messages=[{"role": "user", "content": _TEXT_PROMPT + text[:30000]}],
     )
     return _parse_json(resp.content[0].text, fallback={})
