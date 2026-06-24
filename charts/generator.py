@@ -27,7 +27,6 @@ _STRATEGY_LABELS = {
     "qullamaggie":  "Qullamaggie Setup",
     "ema_pullback": "5 EMA Pullback",
     "gap_up":       "Buyable Gap Up",
-    "pocket_pivot": "Pocket Pivot",
     "alex_21ema":   "Alex 21EMA Cloud",
 }
 
@@ -62,14 +61,6 @@ _LAYOUTS: dict[str, dict] = {
         "lookback_days": 25,
         "ma_specs": [
             ("sma_50", "#4488FF", 1.4, "-", "SMA 50"),
-        ],
-    },
-    "pocket_pivot": {
-        "lookback_days": 45,
-        "ma_specs": [
-            ("sma_50", "#4488FF", 1.4, "-", "SMA 50"),
-            ("sma_10", "#FFFFFF", 1.1, "-", "SMA 10"),
-            ("ema_21", "#00CC44", 1.1, "-", "EMA 21"),
         ],
     },
     "alex_21ema": {
@@ -268,14 +259,6 @@ def _ma_addplots(df: pd.DataFrame, ma_specs: list) -> list:
 
 def _extra_addplots(signal: dict, strategy: str, plot_df: pd.DataFrame) -> list:
     """Strategy-specific addplots (markers, secondary overlays)."""
-    if strategy == "pocket_pivot":
-        marker_series = pd.Series(float("nan"), index=plot_df.index)
-        marker_series.iloc[-1] = plot_df["low"].iloc[-1] * 0.983
-        return [
-            mpf.make_addplot(
-                marker_series, type="scatter", marker="^", markersize=150, color="yellow", panel=0
-            )
-        ]
     return []
 
 
@@ -293,8 +276,6 @@ def _annotate(ax_price, ax_vol, sig: dict, strategy: str, plot_df: pd.DataFrame)
         _ann_ema_pullback(ax_price, sig, n, plot_df)
     elif strategy == "gap_up":
         _ann_gap_up(ax_price, sig, n)
-    elif strategy == "pocket_pivot":
-        _ann_pocket_pivot(ax_price, ax_vol, sig, n, plot_df)
     elif strategy == "alex_21ema":
         _ann_alex_21ema(ax_price, sig, n, plot_df)
 
@@ -361,23 +342,6 @@ def _ann_gap_up(ax, sig: dict, n: int) -> None:
     gap_pct = sig.get("gap_pct", 0)
     vol_ratio = sig.get("volume_ratio", 0)
     _info_box(ax, f"Gap +{gap_pct * 100:.1f}% · Vol ×{vol_ratio:.1f}")
-
-
-def _ann_pocket_pivot(ax_price, ax_vol, sig: dict, n: int, plot_df: pd.DataFrame) -> None:
-    max_down_vol = sig.get("max_down_day_volume")
-    if max_down_vol:
-        ax_vol.axhline(max_down_vol, color="#FF4444", linestyle="--", linewidth=1.0, alpha=0.8)
-        ax_vol.text(0.01, max_down_vol, " Max ↓-day vol", color="#FF4444", fontsize=6, va="bottom")
-
-    # Highlight down-day bars in prior 10 sessions on volume panel
-    for i in range(max(1, n - 11), n - 1):
-        if plot_df["close"].iloc[i] < plot_df["close"].iloc[i - 1]:
-            ax_vol.axvspan(i - 0.5, i + 0.5, alpha=0.28, color="#FF6644")
-
-    vol_ratio = sig.get("volume_ratio_vs_down_days", 0)
-    ref_sma = "SMA 10" if sig.get("reference_sma") == "sma_10" else "EMA 21"
-    cross_txt = "crosses" if sig.get("crosses_over") else "extends from"
-    _info_box(ax_price, f"Vol ×{vol_ratio:.1f} vs ↓days · {cross_txt} {ref_sma}")
 
 
 def _ann_alex_21ema(ax, sig: dict, n: int, plot_df: pd.DataFrame) -> None:

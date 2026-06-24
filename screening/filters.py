@@ -59,7 +59,7 @@ def apply_base_filters(
     Minimal shared pre-filter for all strategies.
     Only checks history length, minimum price, and liquidity.
     Stage 2 trend conditions are enforced inside detect_vcp() only —
-    other strategies (Qullamaggie, EMA pullback, BGU, Pocket Pivot) apply
+    other strategies (Qullamaggie, EMA pullback, BGU) apply
     their own lighter criteria internally.
     """
     if len(df) < 200:

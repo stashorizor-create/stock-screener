@@ -110,44 +110,27 @@ def _gap_up_signal(df):
     })
 
 
-def _pocket_pivot_signal(df):
-    close = float(df["close"].iloc[-1])
-    vol = float(df["volume"].iloc[-1])
-    return _sig("pocket_pivot", df, {
-        "strategy": "pocket_pivot",
-        "reference_sma": "sma_10",
-        "reference_sma_value": close * 0.97,
-        "crosses_over": True,
-        "volume_ratio_vs_down_days": 1.8,
-        "volume_ratio_vs_50d_avg": 1.4,
-        "max_down_day_volume": vol * 0.7,
-        "today_volume": vol,
-    })
-
-
 def _multi_signal(df):
     close = float(df["close"].iloc[-1])
-    vol = float(df["volume"].iloc[-1])
     return {
         "symbol": "MOCK",
-        "strategies_fired": ["vcp", "pocket_pivot"],
+        "strategies_fired": ["vcp", "qullamaggie"],
         "n_strategies": 2,
         "composite_score": 85.0,
-        "alert_type": "VCP Setup + Pocket Pivot",
+        "alert_type": "VCP Setup + Qullamaggie Setup",
         "pivot_price": close * 1.01,
         "signals": {
             "vcp": {
                 "strategy": "vcp", "pivot_price": close * 1.01,
                 "n_contractions": 3, "volume_declining": True, "quality_score": 72.0,
             },
-            "pocket_pivot": {
-                "strategy": "pocket_pivot",
-                "reference_sma": "sma_10",
-                "reference_sma_value": close * 0.97,
-                "crosses_over": True,
-                "volume_ratio_vs_down_days": 1.8,
-                "max_down_day_volume": vol * 0.7,
-                "today_volume": vol,
+            "qullamaggie": {
+                "strategy": "qullamaggie",
+                "pivot_price": close * 1.01,
+                "base_low": close * 0.92,
+                "base_days": 20,
+                "prior_move_pct": 0.45,
+                "volume_drying": True,
                 "quality_score": 80.0,
             },
         },
@@ -189,10 +172,6 @@ class TestSingleStrategyCharts:
 
     def test_gap_up_chart_created(self, df, tmp_path):
         out = generate_chart(df, _gap_up_signal(df), "MOCK", output_dir=tmp_path)
-        assert out.exists() and out.stat().st_size > 50_000
-
-    def test_pocket_pivot_chart_created(self, df, tmp_path):
-        out = generate_chart(df, _pocket_pivot_signal(df), "MOCK", output_dir=tmp_path)
         assert out.exists() and out.stat().st_size > 50_000
 
 

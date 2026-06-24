@@ -4,7 +4,6 @@ from tests.mock_data import make_stage2_base, make_downtrend
 from screening.indicators import compute_all
 from screening.strategies.vcp import detect_vcp
 from screening.strategies.qullamaggie import detect_qullamaggie_setup
-from screening.strategies.pocket_pivot import detect_pocket_pivot
 from screening.strategies.gap_up import detect_gap_up
 from screening.strategies.ema_pullback import detect_ema_pullback
 from screening.strategies.runner import run_all_strategies
@@ -41,31 +40,6 @@ def test_qullamaggie_returns_dict_or_none_for_stage2():
     df = _prep(make_stage2_base)
     result = detect_qullamaggie_setup(df, len(df) - 1)
     assert result is None or isinstance(result, dict)
-
-
-# --- Pocket Pivot ---
-
-def test_pocket_pivot_requires_above_sma50():
-    df = _prep(make_downtrend)
-    result = detect_pocket_pivot(df, len(df) - 1)
-    assert result is None
-
-
-def test_pocket_pivot_volume_condition():
-    """Manually construct a pocket pivot day."""
-    df = compute_all(make_stage2_base())
-    end_idx = len(df) - 1
-
-    # Force today's volume to be enormous so it beats all down days
-    df = df.copy()
-    df.iloc[end_idx, df.columns.get_loc("volume")] = int(df["volume"].max() * 10)
-    # Recompute volume SMAs
-    df["volume_sma_50"] = df["volume"].rolling(50).mean()
-    df["volume_sma_10"] = df["volume"].rolling(10).mean()
-
-    result = detect_pocket_pivot(df, end_idx)
-    # With massive volume and Stage 2 stock near SMAs, should fire
-    assert result is None or result["volume_ratio_vs_down_days"] > 1.0
 
 
 # --- Gap Up ---

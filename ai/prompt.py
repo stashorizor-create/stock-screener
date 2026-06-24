@@ -91,16 +91,6 @@ Look for:
 Red flags: close in lower half of the range (buyers gave back gains); \
 gap too large — stock already extended and may retrace the whole gap; \
 low volume gap — no institutional follow-through.""",
-
-    "pocket_pivot": """STRATEGY: Pocket Pivot (Kacher & Morales)
-Look for:
-- Price at or slightly above the 10 or 21 SMA — not extended above it
-- Price above the 50 SMA (Stage 2 trend intact)
-- Today's volume EXCEEDS the highest volume on any down day in the prior 10 sessions
-  (the orange-highlighted bars in the volume panel)
-- The max down-day volume threshold line — today should clearly clear it
-Red flags: price too far above SMA (extended, late); volume only marginally \
-above the threshold; stock below 50 SMA.""",
 }
 
 # ---------------------------------------------------------------------------
@@ -181,12 +171,6 @@ def format_signal_summary(sig: dict) -> str:
         lines += [
             f"  Gap size:        {sub.get('gap_pct', 0):+.1%}" if sub.get("gap_pct") else "",
             f"  Volume ratio:    {sub.get('volume_ratio', 'n/a')}×",
-        ]
-    elif strategy == "pocket_pivot":
-        lines += [
-            f"  Vol vs ↓days:    {sub.get('volume_ratio_vs_down_days', 'n/a')}×",
-            f"  Reference SMA:   {sub.get('reference_sma', 'n/a')}",
-            f"  Crosses over:    {sub.get('crosses_over', 'n/a')}",
         ]
 
     return "\n".join(l for l in lines if l)

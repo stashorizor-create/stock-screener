@@ -367,13 +367,12 @@ BADGE_COLORS = {
     "qullamaggie":    "#a371f7",
     "ema_pullback":   "#e3b341",
     "gap_up":         "#3fb950",
-    "pocket_pivot":   "#f0883e",
     "sma_inside_day": "#58a6ff",
     "alex_21ema":     "#79c0ff",
 }
 BADGE_LABELS = {
     "vcp": "VCP", "qullamaggie": "Q", "ema_pullback": "EMA5",
-    "gap_up": "BGU", "pocket_pivot": "PP", "sma_inside_day": "SMA-ID",
+    "gap_up": "BGU", "sma_inside_day": "SMA-ID",
     "alex_21ema": "21D",
 }
 
@@ -545,13 +544,6 @@ _STRATEGY_REFS: dict[str, str] = {
         "Stop at gap day low.\n"
         "---"
     ),
-    "pocket_pivot": (
-        "--- Reference: Chris Kacher & Gil Morales — 'Trade Like an O'Neil Disciple' ---\n"
-        "Pocket Pivot: volume on an up day exceeds the maximum volume on any down day in the prior "
-        "10 sessions, while price is near a key moving average (10 or 21 SMA/EMA). "
-        "Signals institutional accumulation before a visible breakout.\n"
-        "---"
-    ),
 }
 
 
@@ -678,7 +670,7 @@ sig = None  # defined in sidebar when signals exist; checked in main content
 STRAT_MAP = {
     "VCP": "vcp", "Qullamaggie": "qullamaggie",
     "5 EMA Pullback": "ema_pullback", "Buyable Gap Up": "gap_up",
-    "Pocket Pivot": "pocket_pivot", "SMA Inside Day": "sma_inside_day",
+    "SMA Inside Day": "sma_inside_day",
 }
 
 _selected_newsletter_date: str | None = None
@@ -1118,7 +1110,7 @@ with st.sidebar:
     with _fc1:
         strat_filter = st.selectbox(
             "Strategy",
-            ["All", "VCP", "Qullamaggie", "5 EMA Pullback", "Buyable Gap Up", "Pocket Pivot", "SMA Inside Day"],
+            ["All", "VCP", "Qullamaggie", "5 EMA Pullback", "Buyable Gap Up", "SMA Inside Day"],
             label_visibility="collapsed",
         )
     with _fc2:

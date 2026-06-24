@@ -23,11 +23,11 @@ logger = logging.getLogger(__name__)
 
 BADGE_LABELS = {
     "vcp": "VCP", "qullamaggie": "Q", "ema_pullback": "EMA5",
-    "gap_up": "BGU", "pocket_pivot": "PP",
+    "gap_up": "BGU",
 }
 BADGE_COLORS = {
     "vcp": "#388bfd", "qullamaggie": "#a371f7", "ema_pullback": "#e3b341",
-    "gap_up": "#3fb950", "pocket_pivot": "#f0883e",
+    "gap_up": "#3fb950",
 }
 
 
