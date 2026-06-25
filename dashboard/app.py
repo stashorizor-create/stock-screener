@@ -2414,9 +2414,22 @@ if _run_context:
 
 _context_result = st.session_state[_CONTEXT_KEY]
 if _context_result is None:
+    # Count analyses already saved for other stocks this session, so the user
+    # knows switching stocks doesn't throw their work away.
+    _other_saved = sum(
+        1 for _k, _v in st.session_state.items()
+        if _k.startswith("context_") and _k != _CONTEXT_KEY and _v
+    )
+    _placeholder = (
+        'Click to get a macro &amp; news analysis from Claude — then continue the discussion in the chat below.'
+    )
+    if _other_saved:
+        _placeholder += (
+            f'<br><span style="color:#3fb950">💾 {_other_saved} saved analysis'
+            f'{"es" if _other_saved != 1 else ""} on other stocks — reselect a stock to reopen it.</span>'
+        )
     st.markdown(
-        '<div style="color:#484f58;font-size:12px;padding:8px 0">'
-        'Click to get a macro &amp; news analysis from Claude — then continue the discussion in the chat below.</div>',
+        f'<div style="color:#484f58;font-size:12px;padding:8px 0">{_placeholder}</div>',
         unsafe_allow_html=True,
     )
 else:
@@ -2425,6 +2438,11 @@ else:
         f'border-radius:6px;border:1px solid #21262d;font-size:13px;line-height:1.6">'
         f'{_context_result}'
         f'</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f'<div style="color:#3fb950;font-size:11px;padding:4px 0 0 2px">'
+        f'💾 Saved for {sig["symbol"]} — stays here when you switch stocks and reopens when you return.</div>',
         unsafe_allow_html=True,
     )
 
