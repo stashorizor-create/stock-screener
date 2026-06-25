@@ -1090,18 +1090,16 @@ with st.sidebar:
         # Region selector — Nordic is primary
     _REGION_EXCHANGES = {
         "Nordic":  {"STO", "OSL", "CPH", "HEL"},
-        "Europe":  {"PAR", "AMS", "MIL", "MAD", "BRU", "LON", "CHE"},
         "US":      {"NYSE", "NASDAQ"},
         "All":     None,
     }
     _REGION_EXCH_OPTIONS = {
         "Nordic":  ["All", "STO", "OSL", "CPH", "HEL"],
-        "Europe":  ["All", "PAR", "AMS", "MIL", "MAD", "BRU", "LON", "CHE"],
         "US":      ["All", "NYSE", "NASDAQ"],
-        "All":     ["All", "STO", "OSL", "CPH", "HEL", "PAR", "AMS", "MIL", "MAD", "BRU", "LON", "CHE", "NYSE", "NASDAQ"],
+        "All":     ["All", "STO", "OSL", "CPH", "HEL", "NYSE", "NASDAQ"],
     }
     region_filter = st.radio(
-        "Region", ["Nordic", "Europe", "US", "All"],
+        "Region", ["Nordic", "US", "All"],
         horizontal=True, index=0, label_visibility="collapsed",
     )
 

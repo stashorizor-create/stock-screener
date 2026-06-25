@@ -26,7 +26,7 @@ sys.path.insert(0, str(ROOT))
 import pandas as pd
 
 from config.settings import settings
-from config.universe_config import EXCHANGES, NORDIC_MARKET_IDS, NORDIC_EXCHANGES, EUROPEAN_EXCHANGES, US_EXCHANGES, MARKET_ID_TO_EXCHANGE
+from config.universe_config import EXCHANGES, NORDIC_MARKET_IDS, NORDIC_EXCHANGES, US_EXCHANGES, MARKET_ID_TO_EXCHANGE
 from data.ingestor import client as borsdata
 from database.models import Alert, Universe, SessionLocal
 from screening.indicators import compute_all, rank_rs_across_universe
@@ -55,9 +55,8 @@ RS_MIN_PERCENTILE = 70.0     # top 30% relative strength required
 # Region → set of exchange codes (used by --region flag)
 REGION_EXCHANGES: dict[str, set[str]] = {
     "nordic":  NORDIC_EXCHANGES,
-    "europe":  EUROPEAN_EXCHANGES,
     "us":      US_EXCHANGES,
-    "all":     NORDIC_EXCHANGES | EUROPEAN_EXCHANGES | US_EXCHANGES,  # DE excluded intentionally
+    "all":     NORDIC_EXCHANGES | US_EXCHANGES,
 }
 
 STOCK_INSTRUMENT_TYPE = 0   # Borsdata: 0 = common stock
@@ -70,7 +69,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--skip-themes",      action="store_true",      help="Skip theme classification")
     p.add_argument("--exchange",         default="",               help="Single exchange (STO/OSL/DE/NYSE/...)")
     p.add_argument("--region",           default="nordic",
-                   choices=["nordic", "europe", "us", "all"],
+                   choices=["nordic", "us", "all"],
                    help="Market region to run (default: nordic)")
     p.add_argument("--from-checkpoint",  default="",  metavar="FILE",
                    help="Path to pipeline_YYYY-MM-DD.json — skip pipeline, retry DB write only")
