@@ -71,3 +71,78 @@ def fetch_sector_returns() -> pd.DataFrame:
         rows.append(row)
 
     return pd.DataFrame(rows) if rows else pd.DataFrame()
+
+
+def fetch_sector_history(period: str = "2y") -> dict[str, pd.Series]:
+    """
+    Daily close history per sector ETF (default 2y so the 200-day SMA is complete
+    across a 1-year chart view). Returns {sector_name: close Series}. Empty on failure.
+    """
+    try:
+        import yfinance as yf
+    except ImportError:
+        logger.warning("yfinance not installed")
+        return {}
+
+    tickers = list(SECTOR_ETFS.values())
+    try:
+        raw = yf.download(tickers, period=period, auto_adjust=True, progress=False)
+        prices = raw["Close"] if "Close" in raw.columns else raw
+    except Exception as exc:
+        logger.warning("yfinance sector history download failed: %s", exc)
+        return {}
+
+    out: dict[str, pd.Series] = {}
+    for sector, ticker in SECTOR_ETFS.items():
+        col = prices.get(ticker)
+        if col is None:
+            continue
+        col = col.dropna()
+        if len(col) >= 60:
+            out[sector] = col
+    return out
+
+
+def minervini_stage(close: pd.Series) -> dict:
+    """
+    Minervini Trend Template (Stage Analysis) for a price series.
+    Returns the 50/150/200-day SMAs plus a 0-7 score, a stage label, and a colour.
+
+    Criteria (sector-adapted; RS-vs-market line omitted):
+      1. price above 150d & 200d SMA   2. 150d > 200d   3. 200d rising (~1mo)
+      4. 50d > 150d > 200d             5. price > 50d
+      6. >=30% above 52w low           7. within 25% of 52w high
+    """
+    blank = {"score": 0, "label": "n/a", "color": "#7d8590", "pass": False,
+             "sma50": None, "sma150": None, "sma200": None}
+    if close is None or len(close) < 200:
+        return blank
+
+    sma50 = close.rolling(50).mean()
+    sma150 = close.rolling(150).mean()
+    sma200 = close.rolling(200).mean()
+    px = float(close.iloc[-1])
+    s50, s150, s200 = float(sma50.iloc[-1]), float(sma150.iloc[-1]), float(sma200.iloc[-1])
+    s200_prev = float(sma200.iloc[-21]) if sma200.notna().sum() > 21 else s200
+    win = close.iloc[-252:] if len(close) >= 252 else close
+    hi52, lo52 = float(win.max()), float(win.min())
+
+    crit = [
+        px > s150 and px > s200,
+        s150 > s200,
+        s200 > s200_prev,
+        s50 > s150 and s50 > s200,
+        px > s50,
+        lo52 > 0 and px >= 1.30 * lo52,
+        hi52 > 0 and px >= 0.75 * hi52,
+    ]
+    score = int(sum(bool(c) for c in crit))
+    if score >= 6:
+        label, color = "Stage 2 ↑", "#3fb950"
+    elif score >= 4:
+        label, color = "Setting up", "#e3b341"
+    else:
+        label, color = ("Stage 4 ↓" if px < s200 else "Stage 1 —"), "#f85149"
+
+    return {"score": score, "label": label, "color": color, "pass": score == 7,
+            "sma50": sma50, "sma150": sma150, "sma200": sma200}

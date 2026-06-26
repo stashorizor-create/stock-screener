@@ -37,7 +37,7 @@ from dashboard.data_loader import (
     get_last_load_error,
     EXCHANGE_FLAGS, EXCHANGE_NAMES,
 )
-from dashboard.market import fetch_sector_returns
+from dashboard.market import fetch_sector_returns, fetch_sector_history, minervini_stage, SECTOR_ETFS
 from dashboard import trades_db
 from themes.refresher import load_hot_themes
 
@@ -314,6 +314,11 @@ def _debug_db():
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_sector_returns():
     return fetch_sector_returns()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_sector_history():
+    return fetch_sector_history()
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -2076,6 +2081,53 @@ if st.session_state.get("market_open", False):
                     + f'</div>',
                     unsafe_allow_html=True,
                 )
+
+    # ── Minervini-style sector ETF trend charts ──────────────────────────────
+    _sec_hist = get_sector_history()
+    if _sec_hist:
+        import plotly.graph_objects as _go
+        st.markdown("**📈 Sector Trends — Minervini Stage Analysis**")
+        st.caption("US sector ETFs · price (white) with 50 (blue) / 150 (orange) / 200 (red) day SMA · "
+                   "sorted by trend stage, Stage 2 leaders first")
+        _staged = []
+        for _sector, _close in _sec_hist.items():
+            _stg = minervini_stage(_close)
+            _staged.append((_stg["score"], _sector, SECTOR_ETFS.get(_sector, ""), _close, _stg))
+        _staged.sort(key=lambda x: x[0], reverse=True)
+
+        _gcols = st.columns(2)
+        for _i, (_score, _sector, _etf, _close, _stg) in enumerate(_staged):
+            with _gcols[_i % 2]:
+                _disp = _close.iloc[-252:]
+                st.markdown(
+                    f'<div style="display:flex;align-items:center;gap:8px;margin:2px 0">'
+                    f'<span style="font-size:13px;font-weight:700;color:#e6edf3">{_sector}</span>'
+                    f'<span style="color:#6e7681;font-size:11px">{_etf}</span>'
+                    f'<span style="margin-left:auto;font-size:10px;font-weight:600;color:{_stg["color"]};'
+                    f'background:{_stg["color"]}22;border-radius:4px;padding:2px 7px">'
+                    f'{_stg["label"]} · {_stg["score"]}/7</span></div>',
+                    unsafe_allow_html=True,
+                )
+                _fig = _go.Figure()
+                _fig.add_trace(_go.Scatter(x=_disp.index, y=_disp.values,
+                                           line=dict(color="#e6edf3", width=1.6), name="Price"))
+                for _k, _c, _nm in [("sma50", "#4488FF", "SMA 50"),
+                                    ("sma150", "#FF9900", "SMA 150"),
+                                    ("sma200", "#FF4444", "SMA 200")]:
+                    _ma = _stg.get(_k)
+                    if _ma is not None:
+                        _mad = _ma.iloc[-252:]
+                        _fig.add_trace(_go.Scatter(x=_mad.index, y=_mad.values,
+                                                   line=dict(color=_c, width=1.0), name=_nm))
+                _fig.update_layout(
+                    height=210, margin=dict(l=0, r=6, t=4, b=0),
+                    paper_bgcolor="#0d1117", plot_bgcolor="#0d1117",
+                    showlegend=False, hovermode="x unified",
+                    font=dict(color="#7d8590", size=10),
+                    xaxis=dict(showgrid=False),
+                    yaxis=dict(showgrid=True, gridcolor="#21262d", side="right"),
+                )
+                st.plotly_chart(_fig, use_container_width=True, key=f"sectorchart_{_etf}")
 
 st.divider()
 
