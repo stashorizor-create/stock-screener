@@ -4,6 +4,7 @@ Falls back to mock data if the DB is unreachable or empty.
 """
 from __future__ import annotations
 
+import json
 import logging
 from datetime import date
 from pathlib import Path
@@ -87,8 +88,17 @@ def _alert_to_signal(row) -> dict:
     )
     composite = alert.composite_score or alert.confidence_score or 0
 
+    detail = {}
+    raw_detail = getattr(alert, "signal_detail", None)
+    if raw_detail:
+        try:
+            detail = json.loads(raw_detail)
+        except Exception:
+            detail = {}
+
     return {
         "symbol":            alert.symbol,
+        "signals":           detail,
         "company_name":      universe.name if universe else alert.symbol,
         "exchange":          universe.exchange if universe else "",
         "currency":          universe.currency if universe else "",
@@ -214,8 +224,18 @@ def _supabase_row_to_signal(row: dict) -> dict:
     )
     composite = row.get("composite_score") or row.get("confidence_score") or 0
 
+    detail = row.get("signal_detail")
+    if isinstance(detail, str):
+        try:
+            detail = json.loads(detail)
+        except Exception:
+            detail = {}
+    elif not isinstance(detail, dict):
+        detail = {}
+
     return {
         "symbol":            row.get("symbol", ""),
+        "signals":           detail,
         "company_name":      universe.get("name") or row.get("symbol", ""),
         "exchange":          universe.get("exchange") or "",
         "currency":          universe.get("currency") or "",

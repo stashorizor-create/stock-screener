@@ -369,11 +369,12 @@ BADGE_COLORS = {
     "gap_up":         "#3fb950",
     "sma_inside_day": "#58a6ff",
     "alex_21ema":     "#79c0ff",
+    "ignition":       "#f78166",
 }
 BADGE_LABELS = {
     "vcp": "VCP", "qullamaggie": "Q", "ema_pullback": "EMA5",
     "gap_up": "BGU", "sma_inside_day": "SMA-ID",
-    "alex_21ema": "21D",
+    "alex_21ema": "21D", "ignition": "IGNITE",
 }
 
 
@@ -670,7 +671,7 @@ sig = None  # defined in sidebar when signals exist; checked in main content
 STRAT_MAP = {
     "VCP": "vcp", "Qullamaggie": "qullamaggie",
     "5 EMA Pullback": "ema_pullback", "Buyable Gap Up": "gap_up",
-    "SMA Inside Day": "sma_inside_day",
+    "SMA Inside Day": "sma_inside_day", "Ignition": "ignition",
 }
 
 _selected_newsletter_date: str | None = None
@@ -1108,7 +1109,7 @@ with st.sidebar:
     with _fc1:
         strat_filter = st.selectbox(
             "Strategy",
-            ["All", "VCP", "Qullamaggie", "5 EMA Pullback", "Buyable Gap Up", "SMA Inside Day"],
+            ["All", "Ignition", "VCP", "Qullamaggie", "5 EMA Pullback", "Buyable Gap Up", "SMA Inside Day"],
             label_visibility="collapsed",
         )
     with _fc2:
@@ -2279,6 +2280,32 @@ st.markdown(strip_html([
     ("RS Rank", f'<span class="white">{rs:.0f}</span><span class="grey" style="font-size:10px">th</span>'
                 if rs else '<span class="grey">—</span>'),
 ]), unsafe_allow_html=True)
+
+# ── Ignition fingerprint (only when the Ignition strategy fired) ──────────────
+_ign = (sig.get("signals") or {}).get("ignition") or {}
+if _ign:
+    def _iw(v, suf=""):
+        return f'<span class="white">{v}{suf}</span>' if v is not None else '<span class="grey">—</span>'
+    _wd = _ign.get("washout_depth_pct")
+    _th = _ign.get("thrust_pct")
+    _ds = _ign.get("dist_sma200_pct")
+    st.markdown('<div class="strip-label" style="margin-top:10px;color:#f78166">⚡ Ignition Fingerprint</div>',
+                unsafe_allow_html=True)
+    st.markdown(strip_html([
+        ("Washout",   _iw(f"−{_wd}%" if _wd is not None else None)),
+        ("Thrust",    _iw(f"+{_th}%" if _th is not None else None)),
+        ("Vol surge", _iw(_ign.get("vol_surge"), "×")),
+        ("ADR contr", _iw(_ign.get("adr_contraction"), "×")),
+        ("vs 200dMA", _iw(f"{_ds:+.0f}%" if _ds is not None else None)),
+        ("Since low", _iw(_ign.get("days_since_trough"), "d")),
+    ]), unsafe_allow_html=True)
+    st.markdown(
+        '<div style="color:#8b949e;font-size:11px;padding:4px 2px;line-height:1.5">'
+        'Deep washout → violent thrust → volume breakout, caught early. A ~5× probabilistic '
+        'edge that works <b>combined with</b> the EPS / Revenue acceleration below — not a guarantee '
+        '(~1 in 5 such setups go on to a big move).</div>',
+        unsafe_allow_html=True,
+    )
 
 _info_l, _info_r = st.columns(2)
 with _info_l:

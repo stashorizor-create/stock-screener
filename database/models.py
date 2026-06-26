@@ -149,6 +149,7 @@ class Alert(Base):
     revenue_yoy = Column(Float)
     revenue_qoq = Column(Float)
     earnings_days_out = Column(Integer)
+    signal_detail = Column(Text)        # JSON of per-strategy detail metrics (e.g. ignition fingerprint)
 
 
 class StrategyParams(Base):

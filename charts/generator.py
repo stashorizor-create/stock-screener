@@ -28,6 +28,7 @@ _STRATEGY_LABELS = {
     "ema_pullback": "5 EMA Pullback",
     "gap_up":       "Buyable Gap Up",
     "alex_21ema":   "Alex 21EMA Cloud",
+    "ignition":     "Big-Winner Ignition",
 }
 
 # MA spec tuples: (column, color, line_width, linestyle, legend_label)
@@ -71,6 +72,14 @@ _LAYOUTS: dict[str, dict] = {
             ("ema_21_low",  "#4499FF", 0.8, "--", "EMA Lo"),
             ("sma_150",     "#FF9900", 1.4, "-",  "SMA 150"),
             ("sma_200",     "#FF4444", 1.4, "-",  "SMA 200"),
+        ],
+    },
+    "ignition": {
+        # long window so the washout low, thrust, and breakout are all visible
+        "lookback_days": 250,
+        "ma_specs": [
+            ("sma_50",  "#4488FF", 1.4, "-", "SMA 50"),
+            ("sma_200", "#FF4444", 1.4, "-", "SMA 200"),
         ],
     },
 }

@@ -258,6 +258,7 @@ def _write_db(raw_signals: list[dict], ai_results: dict, meta_map: dict,
                 revenue_yoy=sig.get("revenue_yoy"),
                 revenue_qoq=sig.get("revenue_qoq"),
                 earnings_days_out=sig.get("earnings_days_out"),
+                signal_detail=json.dumps(sig.get("signals", {}), default=str),
             ))
         session.commit()
 
