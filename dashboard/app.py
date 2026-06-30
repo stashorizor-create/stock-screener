@@ -572,8 +572,10 @@ def _call_claude_chat(
     chart_path: str | None,
     history: list[dict],
     user_message: str,
+    trade_context: str | None = None,
 ) -> str:
-    """Call Claude with chart image + signal context + conversation history."""
+    """Call Claude with chart image + signal context + conversation history.
+    trade_context (optional): the user's logged trade's exact R-multiple price path."""
     import base64
 
     try:
@@ -629,6 +631,16 @@ def _call_claude_chat(
     _refs = "\n\n".join(_STRATEGY_REFS[s] for s in strats if s in _STRATEGY_REFS)
     _refs_block = f"\nStrategy reference material:\n{_refs}\n" if _refs else ""
 
+    _trade_block = (
+        "\n--- The user's ACTUAL logged trade in this stock (exact daily price path, "
+        "R = entry − initial stop) ---\n" + trade_context + "\n"
+        "When the user asks about THIS trade, reason from this real progression: judge entry timing, "
+        "the max favorable excursion (and whether partial profits at R-multiples like +2R/+3R were "
+        "warranted — quantify what that would have banked), max adverse excursion / stop placement, "
+        "exit quality (how much was given back from the peak), and concrete rule-based improvements.\n"
+        "---\n"
+    ) if trade_context else ""
+
     system = (
         f"You are a swing trading analyst helping review {sig['symbol']} "
         f"({sig.get('company_name', sig['symbol'])}, {sig.get('exchange', '?')}).\n"
@@ -639,7 +651,7 @@ def _call_claude_chat(
         f"Target: {sig.get('target_price', '?')}\n"
         f"- RS Rank: {sig.get('rs_rank', '?')}th percentile\n"
         + _theme_line + _fund_line + _news_line
-        + _refs_block
+        + _refs_block + _trade_block
         + "The chart image may be attached. When discussing entries, stops, or pattern behaviour, "
         "cite the relevant strategy reference above (including the wiki URL for alex_21ema). "
         "Discuss macro context, news, and fundamentals alongside technicals. "
@@ -674,6 +686,152 @@ def _call_claude_chat(
         messages=messages,
     )
     return resp.content[0].text
+
+
+# ---------------------------------------------------------------------------
+# Trade post-mortem — give the AI the exact price progression entry -> exit
+# ---------------------------------------------------------------------------
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _sym_to_insid() -> dict:
+    """Ticker (uppercase) -> Borsdata insId across the global + Nordic lists."""
+    out: dict[str, int] = {}
+    try:
+        from data.ingestor import BorsdataClient
+        c = BorsdataClient()
+        for fetch in (c.get_instruments_global, c.get_instruments):
+            try:
+                dfi = fetch()
+            except Exception:
+                continue
+            if dfi is None or dfi.empty:
+                continue
+            for _, row in dfi.iterrows():
+                sym = str(row.get("ticker") or "").upper().strip()
+                if sym and sym not in out:
+                    out[sym] = int(row["insId"])
+    except Exception:
+        pass
+    return out
+
+
+def _trade_progression(symbol, entry_date, entry_price, stop_price, exit_date=None) -> dict:
+    """Daily price path from entry to exit, expressed in R-multiples (R = entry - initial stop).
+    Returns {text, max_mfe_r, max_mae_r, final_r, days, error}."""
+    import pandas as pd
+    from datetime import datetime, timedelta
+    out = {"error": None, "text": "", "max_mfe_r": None, "max_mae_r": None, "final_r": None, "days": 0}
+
+    try:
+        entry_price = float(entry_price); stop_price = float(stop_price)
+    except (TypeError, ValueError):
+        out["error"] = "missing entry/stop price"; return out
+    risk = entry_price - stop_price
+    if risk <= 0:
+        out["error"] = "invalid risk (entry ≤ stop)"; return out
+
+    iid = _sym_to_insid().get(str(symbol).upper().strip())
+    if not iid:
+        out["error"] = f"could not resolve {symbol} in Borsdata"; return out
+
+    try:
+        ed = datetime.fromisoformat(str(entry_date)).date()
+    except Exception:
+        out["error"] = "missing/invalid entry date"; return out
+    xd = None
+    if exit_date:
+        try:
+            xd = datetime.fromisoformat(str(exit_date)).date()
+        except Exception:
+            xd = None
+
+    try:
+        from data.ingestor import BorsdataClient
+        df = BorsdataClient().get_ohlcv(iid, from_date=ed - timedelta(days=7))
+    except Exception as exc:
+        out["error"] = f"OHLCV fetch failed: {exc}"; return out
+    if df is None or df.empty:
+        out["error"] = "no price data"; return out
+
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.sort_values("date").reset_index(drop=True)
+    win = df[df["date"] >= pd.Timestamp(ed)]
+    if xd:
+        win = win[win["date"] <= pd.Timestamp(xd)]
+    win = win.reset_index(drop=True)
+    if win.empty:
+        out["error"] = "no bars in the trade window"; return out
+
+    n = len(win)
+    lines = []
+    run_mfe, run_mae = float("-inf"), float("inf")
+    for i in range(n):
+        hi, lowp, cl = float(win.at[i, "high"]), float(win.at[i, "low"]), float(win.at[i, "close"])
+        run_mfe = max(run_mfe, (hi - entry_price) / risk)
+        run_mae = min(run_mae, (lowp - entry_price) / risk)
+        lines.append((i, win.at[i, "date"].date(),
+                      cl, (cl - entry_price) / risk, (hi - entry_price) / risk, (lowp - entry_price) / risk))
+
+    mfe_idx = max(range(n), key=lambda i: lines[i][4])
+    final_r = lines[-1][3]
+    out.update({"max_mfe_r": round(run_mfe, 2), "max_mae_r": round(run_mae, 2),
+                "final_r": round(final_r, 2), "days": n})
+
+    def _fmt(ln):
+        i, d, cl, rc, rh, rl = ln
+        return f"  D{i} {d}: close {cl:.2f} ({rc:+.2f}R) | day high {rh:+.2f}R / low {rl:+.2f}R"
+
+    if n <= 25:
+        body = "\n".join(_fmt(ln) for ln in lines)
+    else:
+        step = max(1, n // 20)
+        keep = sorted(set(range(0, n, step)) | {mfe_idx, n - 1})
+        body = "\n".join(_fmt(lines[i]) for i in keep) + f"\n  (sampled ~every {step} bars of {n} total)"
+
+    out["text"] = (
+        f"Entry {entry_price:.2f} on {ed}; initial stop {stop_price:.2f} (1R = {risk:.2f}/share).\n"
+        + (f"Exit on {xd}.\n" if xd else "Position still OPEN (path runs to latest bar).\n")
+        + f"Max favorable excursion: {run_mfe:+.2f}R (peak {lines[mfe_idx][1]}, trading day {mfe_idx}).\n"
+        + f"Max adverse excursion: {run_mae:+.2f}R.\n"
+        + f"Last close: {final_r:+.2f}R after {n} trading days.\n"
+        + "Daily path:\n" + body
+    )
+    return out
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _trade_context_for(symbol: str) -> str | None:
+    """If the user has a logged trade in this symbol, return its exact R-multiple price
+    path (entry→exit/now) as text for the AI chat. Prefers an open trade, else the most
+    recent closed one. None if no trade or the path can't be built."""
+    try:
+        sym = str(symbol).upper().strip()
+        trade = None
+        for t in trades_db.get_open_trades():
+            if str(t.get("symbol", "")).upper().strip() == sym:
+                trade = t
+                break
+        if trade is None:
+            for t in trades_db.get_closed_trades(limit=200):
+                if str(t.get("symbol", "")).upper().strip() == sym:
+                    trade = t
+                    break
+        if trade is None:
+            return None
+        prog = _trade_progression(
+            trade.get("symbol"), trade.get("entry_date"),
+            trade.get("entry_price"), trade.get("stop_price"), trade.get("exit_date"),
+        )
+        if prog.get("error"):
+            return None
+        head = (
+            f"strategy {trade.get('strategy', '?')}, outcome {trade.get('outcome', 'open')}"
+            + (f", realized {trade['realized_rr']:+.2f}R" if trade.get("realized_rr") is not None else "")
+            + (f", notes: {trade.get('notes')}" if trade.get("notes") else "")
+        )
+        return head + "\n" + prog["text"]
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -2615,6 +2773,13 @@ else:
 
 st.markdown('<div class="strip-label" style="margin-top:18px">Ask Claude about this signal</div>', unsafe_allow_html=True)
 
+# If the user has a logged trade in this symbol, feed its exact buy→sell price path
+# (in R-multiples) to the AI so it can review entry timing, MFE/MAE, partial-sell levels, etc.
+_trade_ctx = _trade_context_for(sig["symbol"])
+if _trade_ctx:
+    st.caption("📈 Your logged trade in this stock is included — ask things like "
+               "“review this trade” or “where should I have taken partial profits?”")
+
 _chat_key = f"chat_{sig['symbol']}_{sig.get('date', '')}"
 if _chat_key not in st.session_state:
     st.session_state[_chat_key] = []
@@ -2643,7 +2808,8 @@ if _user_input:
     with st.chat_message("assistant"):
         with st.spinner("Thinking…"):
             try:
-                _reply = _call_claude_chat(display, chart_path, _chat_history[:-1], _user_input)
+                _reply = _call_claude_chat(display, chart_path, _chat_history[:-1], _user_input,
+                                           trade_context=_trade_ctx)
             except Exception as _exc:
                 _reply = f"Error contacting Claude: {_exc}"
         st.markdown(_reply)
