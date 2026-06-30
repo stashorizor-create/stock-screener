@@ -11,16 +11,18 @@ from screening.strategies.gap_up import detect_gap_up
 from screening.strategies.sma_inside_day import detect_sma_inside_day
 from screening.strategies.alex_21ema import detect_alex_21ema
 from screening.strategies.ignition import detect_ignition
+from screening.strategies.ema21_inside_day import detect_ema21_inside_day
 
 
 STRATEGY_WEIGHTS = {
-    "vcp":            1.0,
-    "qullamaggie":    1.0,
-    "ema_pullback":   0.8,
-    "gap_up":         0.8,
-    "sma_inside_day": 0.85,
-    "alex_21ema":     0.95,   # P2 (reclaim backtest) gets +10 quality bonus internally
-    "ignition":       0.9,    # big-winner ignition fingerprint (probabilistic, ~5x lift)
+    "vcp":             1.0,
+    "qullamaggie":     1.0,
+    "ema_pullback":    0.8,
+    "gap_up":          0.8,
+    "sma_inside_day":  0.85,
+    "ema21_inside_day": 0.85,  # inside day in contact with the rising 21 EMA cloud
+    "alex_21ema":      0.95,   # P2 (reclaim backtest) gets +10 quality bonus internally
+    "ignition":        0.9,    # big-winner ignition fingerprint (probabilistic, ~5x lift)
 }
 
 
@@ -43,6 +45,7 @@ def run_all_strategies(df: pd.DataFrame, symbol: str) -> dict | None:
         ("ema_pullback",   lambda: detect_ema_pullback(df, end_idx)),
         ("gap_up",         lambda: detect_gap_up(df, end_idx)),
         ("sma_inside_day", lambda: detect_sma_inside_day(df, end_idx)),
+        ("ema21_inside_day", lambda: detect_ema21_inside_day(df, end_idx)),
         ("alex_21ema",     lambda: detect_alex_21ema(df, end_idx)),
         ("ignition",       lambda: detect_ignition(df, end_idx)),
     ]:
@@ -100,7 +103,7 @@ def _composite_score(signals: dict[str, dict]) -> float:
 
 def _best_pivot(signals: dict[str, dict]) -> float | None:
     """Return the pivot price from the highest-priority strategy that has one."""
-    for name in ("vcp", "qullamaggie", "ema_pullback", "gap_up", "sma_inside_day", "alex_21ema", "ignition"):
+    for name in ("vcp", "qullamaggie", "ema_pullback", "gap_up", "sma_inside_day", "ema21_inside_day", "alex_21ema", "ignition"):
         if name in signals:
             s = signals[name]
             for key in ("pivot_price", "entry_trigger", "gap_day_high"):
@@ -117,6 +120,7 @@ def _alert_type(signals: dict[str, dict]) -> str:
         "ema_pullback":   "5 EMA Pullback",
         "gap_up":         "Buyable Gap Up",
         "sma_inside_day": "SMA Inside Day",
+        "ema21_inside_day": "21EMA Inside Day",
         "alex_21ema":     "21EMA Cloud",
         "ignition":       "Ignition",
     }

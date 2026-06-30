@@ -29,6 +29,7 @@ _STRATEGY_LABELS = {
     "gap_up":       "Buyable Gap Up",
     "alex_21ema":   "Alex 21EMA Cloud",
     "ignition":     "Big-Winner Ignition",
+    "ema21_inside_day": "21EMA Cloud Inside Day",
 }
 
 # MA spec tuples: (column, color, line_width, linestyle, legend_label)
@@ -80,6 +81,15 @@ _LAYOUTS: dict[str, dict] = {
         "ma_specs": [
             ("sma_50",  "#4488FF", 1.4, "-", "SMA 50"),
             ("sma_200", "#FF4444", 1.4, "-", "SMA 200"),
+        ],
+    },
+    "ema21_inside_day": {
+        "lookback_days": 50,
+        "ma_specs": [
+            ("ema_21",      "#00DD66", 1.3, "-",  "EMA 21"),
+            ("ema_21_high", "#4499FF", 0.8, "--", "EMA Hi"),
+            ("ema_21_low",  "#4499FF", 0.8, "--", "EMA Lo"),
+            ("sma_50",      "#FF9900", 1.4, "-",  "SMA 50"),
         ],
     },
 }

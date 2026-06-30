@@ -373,12 +373,14 @@ BADGE_COLORS = {
     "ema_pullback":   "#e3b341",
     "gap_up":         "#3fb950",
     "sma_inside_day": "#58a6ff",
+    "ema21_inside_day": "#56d4dd",
     "alex_21ema":     "#79c0ff",
     "ignition":       "#f78166",
 }
 BADGE_LABELS = {
     "vcp": "VCP", "qullamaggie": "Q", "ema_pullback": "EMA5",
     "gap_up": "BGU", "sma_inside_day": "SMA-ID",
+    "ema21_inside_day": "21D-ID",
     "alex_21ema": "21D", "ignition": "IGNITE",
 }
 
@@ -543,6 +545,15 @@ _STRATEGY_REFS: dict[str, str] = {
         "Stop below inside day low or the SMA.\n"
         "---"
     ),
+    "ema21_inside_day": (
+        "--- Reference: 21 EMA Cloud Inside Day (continuation) ---\n"
+        "Same surge prerequisite, but the pullback target is the rising 21 EMA cloud "
+        "(the band between the 21-EMA of highs and of lows). After the run-up the stock "
+        "consolidates back into the cloud and prints an inside day whose range touches the band. "
+        "Cloud must be rising and price not extended >1×ATR above the cloud top. "
+        "Entry above the inside day high; stop below the inside day low.\n"
+        "---"
+    ),
     "gap_up": (
         "--- Reference: IBD Buyable Gap Up ---\n"
         "Strong gap open above prior resistance on heavy volume (≥150% of 10-day average), "
@@ -676,7 +687,8 @@ sig = None  # defined in sidebar when signals exist; checked in main content
 STRAT_MAP = {
     "VCP": "vcp", "Qullamaggie": "qullamaggie",
     "5 EMA Pullback": "ema_pullback", "Buyable Gap Up": "gap_up",
-    "SMA Inside Day": "sma_inside_day", "Ignition": "ignition",
+    "SMA Inside Day": "sma_inside_day", "21EMA Inside Day": "ema21_inside_day",
+    "Ignition": "ignition",
 }
 
 _selected_newsletter_date: str | None = None
@@ -1114,7 +1126,7 @@ with st.sidebar:
     with _fc1:
         strat_filter = st.selectbox(
             "Strategy",
-            ["All", "Ignition", "VCP", "Qullamaggie", "5 EMA Pullback", "Buyable Gap Up", "SMA Inside Day"],
+            ["All", "Ignition", "VCP", "Qullamaggie", "5 EMA Pullback", "Buyable Gap Up", "SMA Inside Day", "21EMA Inside Day"],
             label_visibility="collapsed",
         )
     with _fc2:
