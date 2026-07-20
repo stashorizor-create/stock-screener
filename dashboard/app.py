@@ -49,7 +49,7 @@ st.set_page_config(
     page_title="AI Stock Screener",
     page_icon="📈",
     layout="wide",
-    initial_sidebar_state="auto",
+    initial_sidebar_state="expanded",
 )
 
 # Cookie manager — instantiated at module level so it persists across reruns
