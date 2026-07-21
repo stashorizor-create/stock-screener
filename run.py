@@ -15,6 +15,7 @@ import argparse
 import json
 import logging
 import sys
+from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -29,7 +30,7 @@ from config.settings import settings
 from config.universe_config import EXCHANGES, NORDIC_MARKET_IDS, NORDIC_EXCHANGES, US_EXCHANGES, MARKET_ID_TO_EXCHANGE
 from data.ingestor import client as borsdata
 from database.models import Alert, Universe, SessionLocal
-from screening.indicators import compute_all, rank_rs_across_universe
+from screening.indicators import compute_all, rank_rs_within_groups
 from screening.filters import apply_base_filters
 from screening.strategies.runner import run_all_strategies
 from screening.base_detection import find_base
@@ -359,6 +360,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     passing_dfs: dict[str, pd.DataFrame] = {}   # Stage 2 passers, full df
     raw_returns: dict[str, float]        = {}   # all symbols → 63d return
+    rs_region:   dict[str, str]          = {}   # all symbols → RS peer group (region)
     meta_map:    dict[str, dict]         = {}   # symbol → {name, exchange, currency}
 
     n_total    = len(instruments_df)
@@ -397,6 +399,12 @@ def main() -> None:
             raw_returns[symbol] = float(
                 (df["close"].iloc[-1] / df["close"].iloc[-64]) - 1
             )
+            # RS is ranked within the local market, not across a mixed pool.
+            rs_region[symbol] = (
+                "nordic" if exchange in NORDIC_EXCHANGES
+                else "us" if exchange in US_EXCHANGES
+                else "other"
+            )
 
         # Convert value threshold → share count (Borsdata volumes are always in shares).
         close_10d = float(df["close"].tail(10).mean()) if len(df) >= 10 else float(df["close"].iloc[-1])
@@ -429,10 +437,15 @@ def main() -> None:
         return
 
     # ------------------------------------------------------------------
-    # 3. Two-pass RS ranking
+    # 3. Two-pass RS ranking (within each local market, not a mixed pool)
     # ------------------------------------------------------------------
-    logger.info("Computing RS ranks across %d symbols...", len(raw_returns))
-    rs_ranks = rank_rs_across_universe(raw_returns)
+    _grp_counts = Counter(rs_region.values())
+    logger.info(
+        "Computing RS ranks for %d symbols within local markets: %s",
+        len(raw_returns),
+        ", ".join(f"{g}={n}" for g, n in sorted(_grp_counts.items())),
+    )
+    rs_ranks = rank_rs_within_groups(raw_returns, rs_region)
 
     # ------------------------------------------------------------------
     # 4. Strategy detection on Stage 2 + RS passers
