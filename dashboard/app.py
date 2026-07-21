@@ -241,9 +241,25 @@ div[data-testid="stRadio"] label code {
     font-family: inherit !important;
 }
 
-/* Hide Streamlit top header, hamburger menu, and "Made with Streamlit" footer badge */
-header[data-testid="stHeader"] { display: none !important; }
-#MainMenu { visibility: hidden !important; }
+/* Hide Streamlit header CLUTTER (toolbar, deploy button, hamburger menu) but keep
+   the header element rendered — newer Streamlit puts the sidebar reopen control
+   there, so `display:none` on the whole header traps a collapsed sidebar. */
+header[data-testid="stHeader"] { background: transparent !important; }
+[data-testid="stDecoration"] { display: none !important; }
+/* Hide the deploy button + hamburger menu (they sit in stToolbarActions),
+   but NOT the whole toolbar — the sidebar reopen button lives in there too. */
+[data-testid="stToolbarActions"],
+[data-testid="stAppDeployButton"],
+[data-testid="stMainMenu"],
+#MainMenu { display: none !important; }
+/* Always keep the "reopen collapsed sidebar" control visible */
+[data-testid="stExpandSidebarButton"],
+[data-testid="stSidebarCollapsedControl"],
+[data-testid="collapsedControl"] {
+    display: flex !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+}
 /* Target only the branding badge — NOT the chat input container */
 footer .css-164nlkn, footer .viewerBadge_container__1QSob,
 footer .viewerBadge_link__1S137 { visibility: hidden !important; }
