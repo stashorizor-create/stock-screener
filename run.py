@@ -15,6 +15,7 @@ import argparse
 import json
 import logging
 import sys
+from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -29,7 +30,8 @@ from config.settings import settings
 from config.universe_config import EXCHANGES, NORDIC_MARKET_IDS, NORDIC_EXCHANGES, US_EXCHANGES, MARKET_ID_TO_EXCHANGE
 from data.ingestor import client as borsdata
 from database.models import Alert, Universe, SessionLocal
-from screening.indicators import compute_all, rank_rs_across_universe
+from screening.indicators import compute_all, rank_rs_within_groups
+from dashboard.market import sector_etf_for, sector_name_for
 from screening.filters import apply_base_filters
 from screening.strategies.runner import run_all_strategies
 from screening.base_detection import find_base
@@ -357,9 +359,12 @@ def main() -> None:
     # ------------------------------------------------------------------
     # 2. OHLCV pass — Stage 2 filter + collect RS inputs
     # ------------------------------------------------------------------
-    passing_dfs: dict[str, pd.DataFrame] = {}   # Stage 2 passers, full df
-    raw_returns: dict[str, float]        = {}   # all symbols → 63d return
-    meta_map:    dict[str, dict]         = {}   # symbol → {name, exchange, currency}
+    passing_dfs:  dict[str, pd.DataFrame] = {}   # Stage 2 passers, full df
+    raw_returns:  dict[str, float]        = {}   # all symbols → 63d return
+    rs_region:    dict[str, str]          = {}   # all symbols → RS peer group (region)
+    sector_group: dict[str, str]          = {}   # symbols w/ sector → "region:sectorId" bucket
+    sector_meta:  dict[str, dict]         = {}   # symbol → {sector_id, sector_name, sector_etf}
+    meta_map:     dict[str, dict]         = {}   # symbol → {name, exchange, currency}
 
     n_total    = len(instruments_df)
     n_eligible = 0
@@ -397,6 +402,23 @@ def main() -> None:
             raw_returns[symbol] = float(
                 (df["close"].iloc[-1] / df["close"].iloc[-64]) - 1
             )
+            # RS is ranked within the local market, not across a mixed pool.
+            region = (
+                "nordic" if exchange in NORDIC_EXCHANGES
+                else "us" if exchange in US_EXCHANGES
+                else "other"
+            )
+            rs_region[symbol] = region
+            # Sector bucket for sector-relative RS (region + Borsdata sector).
+            sid = row.get("sectorId")
+            if sid is not None and not pd.isna(sid):
+                sid = int(sid)
+                sector_group[symbol] = f"{region}:{sid}"
+                sector_meta[symbol] = {
+                    "sector_id":   sid,
+                    "sector_name": sector_name_for(sid),
+                    "sector_etf":  sector_etf_for(sid, row.get("branchId")),
+                }
 
         # Convert value threshold → share count (Borsdata volumes are always in shares).
         close_10d = float(df["close"].tail(10).mean()) if len(df) >= 10 else float(df["close"].iloc[-1])
@@ -429,10 +451,33 @@ def main() -> None:
         return
 
     # ------------------------------------------------------------------
-    # 3. Two-pass RS ranking
+    # 3. Two-pass RS ranking (within each local market, not a mixed pool)
     # ------------------------------------------------------------------
-    logger.info("Computing RS ranks across %d symbols...", len(raw_returns))
-    rs_ranks = rank_rs_across_universe(raw_returns)
+    _grp_counts = Counter(rs_region.values())
+    logger.info(
+        "Computing RS ranks for %d symbols within local markets: %s",
+        len(raw_returns),
+        ", ".join(f"{g}={n}" for g, n in sorted(_grp_counts.items())),
+    )
+    rs_ranks = rank_rs_within_groups(raw_returns, rs_region)
+
+    # Sector-relative RS: percentile of the 63d return within the stock's own
+    # region+sector bucket. Only ranked among symbols that have a sector; buckets
+    # smaller than MIN are dropped (a percentile among a handful of names is noise).
+    _SECTOR_BUCKET_MIN = 4
+    _sector_returns = {s: r for s, r in raw_returns.items() if s in sector_group}
+    _sector_rs = rank_rs_within_groups(_sector_returns, sector_group)
+    _bucket_sizes = Counter(sector_group.values())
+    sector_rs_ranks = {
+        s: v for s, v in _sector_rs.items()
+        if _bucket_sizes.get(sector_group.get(s), 0) >= _SECTOR_BUCKET_MIN
+    }
+    logger.info(
+        "Sector-relative RS computed for %d/%d symbols (%d sector buckets ≥ %d)",
+        len(sector_rs_ranks), len(raw_returns),
+        sum(1 for n in _bucket_sizes.values() if n >= _SECTOR_BUCKET_MIN),
+        _SECTOR_BUCKET_MIN,
+    )
 
     # ------------------------------------------------------------------
     # 4. Strategy detection on Stage 2 + RS passers
@@ -454,6 +499,18 @@ def main() -> None:
         stop  = base["base_low"] if base else (entry - 2 * atr)
         risk  = entry - stop
         target = (entry + 3 * risk) if risk > 0 else None
+
+        # Sector-relative RS → persisted in signal_detail (result["signals"]).
+        _srs = sector_rs_ranks.get(symbol)
+        if _srs is not None:
+            _sm = sector_meta.get(symbol, {})
+            result.setdefault("signals", {})["sector_rs"] = {
+                "rank":        round(float(_srs), 1),
+                "sector_id":   _sm.get("sector_id"),
+                "sector_name": _sm.get("sector_name"),
+                "sector_etf":  _sm.get("sector_etf"),
+                "bucket_size": int(_bucket_sizes.get(sector_group.get(symbol), 0)),
+            }
 
         m = meta_map.get(symbol, {})
         result.update({

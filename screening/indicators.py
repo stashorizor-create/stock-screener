@@ -74,3 +74,32 @@ def rank_rs_across_universe(returns: dict[str, float]) -> dict[str, float]:
     series = pd.Series(returns)
     ranks = series.rank(pct=True) * 100
     return ranks.to_dict()
+
+
+def rank_rs_within_groups(
+    returns: dict[str, float],
+    groups: dict[str, str],
+) -> dict[str, float]:
+    """
+    Percentile-rank RS *within each group* rather than across a mixed pool.
+
+    Relative strength is only meaningful against a comparable universe: a Nordic
+    stock should be ranked against Nordic peers, a US stock against US peers.
+    Pooling both markets lets whichever tape is hotter dominate the top ranks and
+    gate out the true leaders of the weaker market.
+
+    returns: {symbol: 63d_return}
+    groups:  {symbol: group_key} (e.g. "nordic" / "us"); symbols with no group
+             fall into a shared bucket so they are still ranked among themselves.
+    Returns: {symbol: percentile_rank (0-100)} — each rank relative to its group.
+    """
+    if not returns:
+        return {}
+    buckets: dict[str, dict[str, float]] = {}
+    for sym, ret in returns.items():
+        buckets.setdefault(groups.get(sym, "_"), {})[sym] = ret
+
+    out: dict[str, float] = {}
+    for bucket in buckets.values():
+        out.update(rank_rs_across_universe(bucket))
+    return out

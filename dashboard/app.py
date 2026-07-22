@@ -338,6 +338,13 @@ def get_sector_history():
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
+def get_entry_regime() -> dict:
+    """Market (QQQ vs SMA50) + per-sector SMA20-slope regime for the entry flag."""
+    from dashboard.market import compute_entry_regime
+    return compute_entry_regime()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_hot_themes() -> dict:
     return load_hot_themes()
 
@@ -952,8 +959,10 @@ def compute_watchlist_ohlcv(tickers: tuple[str, ...]) -> dict[str, dict]:
     from data.ingestor import BorsdataClient
 
     # ── Build ticker → Borsdata insId map (US markets only) ─────────────────
+    from dashboard.market import sector_etf_for
     _US_MARKET_IDS = {29, 32, 33, 34}
     sym_to_id: dict[str, int] = {}
+    sym_to_etf: dict[str, str] = {}   # ticker → SPDR sector ETF (for entry-regime flag)
     try:
         client = BorsdataClient()
         df_global = client.get_instruments_global()
@@ -963,6 +972,9 @@ def compute_watchlist_ohlcv(tickers: tuple[str, ...]) -> dict[str, dict]:
                 sym = str(row.get("ticker") or "").upper().strip()
                 if sym:
                     sym_to_id[sym] = int(row["insId"])
+                    etf = sector_etf_for(row.get("sectorId"), row.get("branchId"))
+                    if etf:
+                        sym_to_etf[sym] = etf
     except Exception as exc:
         return {"_error": str(exc)}
 
@@ -1062,14 +1074,17 @@ def compute_watchlist_ohlcv(tickers: tuple[str, ...]) -> dict[str, dict]:
 
     results: dict[str, dict] = {}
     for ticker in tickers:
+        _etf = sym_to_etf.get(ticker.upper())
         bid = sym_to_id.get(ticker.upper())
         if not bid:
-            results[ticker] = {"df": None, "score": {"total": 0}, "error": f"No Borsdata ID for {ticker}"}
+            results[ticker] = {"df": None, "score": {"total": 0}, "sector_etf": _etf,
+                               "error": f"No Borsdata ID for {ticker}"}
             continue
         try:
             df = client.get_ohlcv(bid, from_date=from_date, max_count=200)
             if df.empty or len(df) < 30:
-                results[ticker] = {"df": None, "score": {"total": 0}, "error": "insufficient data"}
+                results[ticker] = {"df": None, "score": {"total": 0}, "sector_etf": _etf,
+                                   "error": "insufficient data"}
                 continue
             df = df.reset_index(drop=True)
             if hasattr(df["date"].iloc[0], "strftime"):
@@ -1078,12 +1093,14 @@ def compute_watchlist_ohlcv(tickers: tuple[str, ...]) -> dict[str, dict]:
                 df["date"] = df["date"].astype(str)
             score = _score(df)
             results[ticker] = {
-                "df":    df.tail(80).to_dict("records"),
-                "score": score,
-                "error": None,
+                "df":         df.tail(80).to_dict("records"),
+                "score":      score,
+                "sector_etf": _etf,
+                "error":      None,
             }
         except Exception as exc:
-            results[ticker] = {"df": None, "score": {"total": 0}, "error": str(exc)}
+            results[ticker] = {"df": None, "score": {"total": 0}, "sector_etf": _etf,
+                               "error": str(exc)}
 
     return results
 
@@ -1434,6 +1451,29 @@ def _render_newsletter_page(sel_date: str | None = None):
             with st.spinner(f"Loading OHLCV for {len(_wl_tickers)} tickers…"):
                 _wl_data = compute_watchlist_ohlcv(_wl_tickers)
 
+            # Entry-regime: market (QQQ<SMA50) + per-sector SMA20 slope.
+            from dashboard.market import entry_regime_flag
+            _regime = get_entry_regime()
+
+            # Market banner — the shared half of the entry flag.
+            if _regime and _regime.get("market_weak") is not None:
+                if _regime["market_weak"]:
+                    _mk_c, _mk_bg, _mk_txt = "#f85149", "#f8514915", (
+                        f"⚠️ Market weak — QQQ ${_regime.get('qqq_close', 0):.0f} is below its "
+                        f"50-day SMA (${_regime.get('qqq_sma50', 0):.0f}). Names whose sector is also "
+                        f"rolling over are flagged ⚠️ below (your diary's worse-entry regime)."
+                    )
+                else:
+                    _mk_c, _mk_bg, _mk_txt = "#3fb950", "#3fb95015", (
+                        f"✓ Market OK — QQQ ${_regime.get('qqq_close', 0):.0f} is above its "
+                        f"50-day SMA (${_regime.get('qqq_sma50', 0):.0f}). No entry-regime warnings."
+                    )
+                st.markdown(
+                    f'<div style="background:{_mk_bg};border:1px solid {_mk_c}55;border-radius:6px;'
+                    f'padding:8px 12px;margin:4px 0 10px;color:{_mk_c};font-size:12.5px">{_mk_txt}</div>',
+                    unsafe_allow_html=True,
+                )
+
             # Screener lookup: {symbol → composite_score}
             _screener_map = {s["symbol"].upper(): s["composite_score"] for s in ALL_SIGNALS}
 
@@ -1470,6 +1510,7 @@ def _render_newsletter_page(sel_date: str | None = None):
                     "in_screener": tk in _screener_map,
                     "comp_score":  _screener_map.get(tk),
                     "has_data":    d.get("df") is not None,
+                    "sector_etf":  d.get("sector_etf"),
                 })
             for sec in _SECTION_ORDER:
                 if sec == "themes_setup":
@@ -1582,12 +1623,26 @@ def _render_newsletter_page(sel_date: str | None = None):
                         _lvls = (f'<span style="color:#8b949e;font-size:11px;margin-left:8px">'
                                  f'entry ${sc["entry"]:.2f} · stop ${sc["stop"]:.2f}</span>')
 
+                    # Entry-regime flag: market weak AND this stock's sector rolling over.
+                    _flag = entry_regime_flag(row.get("sector_etf"), _regime)
+                    _regime_badge = ""
+                    if _flag["unfavorable"]:
+                        _slp = _flag.get("sector_slope")
+                        _slp_txt = f" {_slp * 100:+.2f}%/d" if _slp is not None else ""
+                        _regime_badge = (
+                            f'<span style="font-size:10px;font-weight:700;color:#f85149;'
+                            f'background:#f8514922;border-radius:4px;padding:2px 6px;margin-left:4px" '
+                            f'title="Market weak (QQQ&lt;SMA50) and {_flag.get("sector_etf")} 20-day SMA '
+                            f'sloping down{_slp_txt} — your diary\'s worse-entry regime">'
+                            f'⚠️ regime</span>')
+
                     st.markdown(
                         f'<div style="display:flex;align-items:center;gap:6px;'
                         f'padding:6px 8px;background:#0d1117;border-radius:6px;'
                         f'border:1px solid #21262d;margin-bottom:3px">'
                         f'<span style="font-weight:700;color:#e6edf3;min-width:52px">{tk}</span>'
                         + _comp_badge
+                        + _regime_badge
                         + f'<span style="flex:1"></span>'
                         + _criteria
                         + f'<span style="color:{alx_color};font-weight:700;font-size:13px;'
@@ -1999,6 +2054,25 @@ def _render_newsletter_page(sel_date: str | None = None):
 # Main content
 # ---------------------------------------------------------------------------
 
+# Market-state chip (QQQ vs its 50-day SMA) — always visible on both pages.
+_reg = get_entry_regime()
+if _reg and _reg.get("market_weak") is not None:
+    if _reg["market_weak"]:
+        _c, _bg, _arrow, _lbl = "#f85149", "#f8514918", "↓", "below 50d SMA"
+    else:
+        _c, _bg, _arrow, _lbl = "#3fb950", "#3fb95018", "↑", "above 50d SMA"
+    _qc, _qs = _reg.get("qqq_close"), _reg.get("qqq_sma50")
+    _px = f'{_qc:.0f} / {_qs:.0f}' if (_qc and _qs) else ''
+    st.markdown(
+        f'<div style="display:inline-flex;align-items:center;gap:8px;'
+        f'background:{_bg};border:1px solid {_c}55;border-radius:20px;'
+        f'padding:4px 12px;margin-bottom:10px;font-size:12.5px;color:{_c};font-weight:600" '
+        f'title="Nasdaq-100 market state — the diary\'s worse-entry regime needs this weak AND the sector rolling over">'
+        f'<span style="font-size:14px">{_arrow}</span> QQQ {_lbl}'
+        f'&nbsp;<span style="color:#8b949e;font-weight:400;font-size:11px">{_px}</span></div>',
+        unsafe_allow_html=True,
+    )
+
 # Newsletter page — render and stop before screener code
 if _page == "📧 Alex's Picks":
     _render_newsletter_page(_selected_newsletter_date)
@@ -2351,15 +2425,68 @@ else:
 # Info strips below chart
 rr = display.get("risk_reward")
 rs = display.get("rs_rank")
+_srs = (sig.get("signals") or {}).get("sector_rs") or {}
+_srs_rank = _srs.get("rank")
+_srs_sector = _srs.get("sector_name") or _srs.get("sector_etf")
 st.markdown('<div class="strip-label">Trade levels</div>', unsafe_allow_html=True)
 st.markdown(strip_html([
     ("Entry",   _price_fmt(sig, display.get("entry_price"))),
     ("Stop",    _price_fmt(sig, display.get("stop_price"))),
     ("Target",  _price_fmt(sig, display.get("target_price"))),
     ("R / R",   f'<span class="white">{rr:.1f}×</span>' if rr else '<span class="grey">—</span>'),
-    ("RS Rank", f'<span class="white">{rs:.0f}</span><span class="grey" style="font-size:10px">th</span>'
+    ("RS · market", f'<span class="white">{rs:.0f}</span><span class="grey" style="font-size:10px">th</span>'
                 if rs else '<span class="grey">—</span>'),
+    ("RS · sector",
+     (f'<span class="white">{_srs_rank:.0f}</span><span class="grey" style="font-size:10px">th</span>'
+      + (f'<span class="grey" style="font-size:10px"> · {_srs_sector}</span>' if _srs_sector else ""))
+     if _srs_rank is not None else '<span class="grey">—</span>'),
 ]), unsafe_allow_html=True)
+
+# ── Market & sector regime (QQQ state + this stock's sector 20d slope) ────────
+# _reg is the cached entry-regime computed once at the top of the main body.
+if _reg and _reg.get("market_weak") is not None:
+    from dashboard.market import entry_regime_flag
+    _sec_etf = _srs.get("sector_etf")
+    _rf = entry_regime_flag(_sec_etf, _reg)
+    _qc, _qs = _reg.get("qqq_close"), _reg.get("qqq_sma50")
+
+    _mkt_html = ('<span style="color:#f85149">↓ below 50d</span>' if _rf["market_weak"]
+                 else '<span style="color:#3fb950">↑ above 50d</span>')
+    if _qc and _qs:
+        _mkt_html += f'<span class="grey" style="font-size:10px"> {_qc:.0f}/{_qs:.0f}</span>'
+
+    _slope = _rf.get("sector_slope")
+    if _sec_etf and _slope is not None:
+        _sc_col = "#f85149" if _rf["sector_weak"] else "#3fb950"
+        _arrow  = "↓" if _slope < 0 else "↑"
+        _sec_html = (f'<span style="color:{_sc_col}">{_arrow} {_slope * 100:+.2f}%/d</span>'
+                     f'<span class="grey" style="font-size:10px"> {_srs_sector or _sec_etf}</span>')
+    elif _sec_etf:
+        _sec_html = f'<span class="grey">— {_srs_sector or _sec_etf}</span>'
+    else:
+        _sec_html = '<span class="grey">— (US signals, after next run)</span>'
+
+    if _rf["unfavorable"]:
+        _verdict = '<span style="color:#f85149;font-weight:700">⚠️ Unfavorable</span>'
+    elif _sec_etf and _slope is not None:
+        _verdict = '<span style="color:#3fb950">✓ OK</span>'
+    else:
+        _verdict = '<span class="grey">—</span>'
+
+    st.markdown('<div class="strip-label" style="margin-top:10px">Market &amp; sector regime</div>',
+                unsafe_allow_html=True)
+    st.markdown(strip_html([
+        ("QQQ · market",      _mkt_html),
+        ("Sector 20d slope",  _sec_html),
+        ("Entry regime",      _verdict),
+    ]), unsafe_allow_html=True)
+    if _rf["unfavorable"]:
+        st.markdown(
+            '<div style="color:#8b949e;font-size:11px;padding:4px 2px;line-height:1.5">'
+            'Market weak (QQQ &lt; 50d) <b>and</b> this sector rolling over (20d SMA '
+            'sloping &lt; −0.2%/day) — the regime your diary flagged as producing worse entries.</div>',
+            unsafe_allow_html=True,
+        )
 
 # ── Ignition fingerprint (only when the Ignition strategy fired) ──────────────
 _ign = (sig.get("signals") or {}).get("ignition") or {}
