@@ -168,7 +168,20 @@ SECTOR_ID_TO_ETF: dict[int, str] = {
     9:  "XLC",   # Telekommunikation    (Communication Services)
     10: "XLU",   # Kraftförsörjning     (Utilities)
 }
+SECTOR_ID_TO_NAME: dict[int, str] = {
+    1:  "Financials",       2: "Consumer Staples", 3: "Energy",         4: "Healthcare",
+    5:  "Industrials",      6: "Technology",       7: "Materials",      8: "Consumer Disc.",
+    9:  "Communication",   10: "Utilities",
+}
 _REIT_BRANCH_IDS = {75, 76}   # Fastighetsbolag / Fastighet-REIT → real estate
+
+
+def sector_name_for(sector_id) -> str | None:
+    """English GICS-style sector name for a Borsdata sectorId."""
+    try:
+        return SECTOR_ID_TO_NAME.get(int(sector_id)) if sector_id is not None else None
+    except (TypeError, ValueError):
+        return None
 _REGIME_SECTOR_ETFS = ["XLK", "XLE", "XLF", "XLV", "XLI",
                        "XLY", "XLP", "XLU", "XLRE", "XLB", "XLC"]
 _MARKET_ETF = "QQQ"
