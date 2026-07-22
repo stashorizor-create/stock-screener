@@ -2054,6 +2054,25 @@ def _render_newsletter_page(sel_date: str | None = None):
 # Main content
 # ---------------------------------------------------------------------------
 
+# Market-state chip (QQQ vs its 50-day SMA) — always visible on both pages.
+_reg = get_entry_regime()
+if _reg and _reg.get("market_weak") is not None:
+    if _reg["market_weak"]:
+        _c, _bg, _arrow, _lbl = "#f85149", "#f8514918", "↓", "below 50d SMA"
+    else:
+        _c, _bg, _arrow, _lbl = "#3fb950", "#3fb95018", "↑", "above 50d SMA"
+    _qc, _qs = _reg.get("qqq_close"), _reg.get("qqq_sma50")
+    _px = f'{_qc:.0f} / {_qs:.0f}' if (_qc and _qs) else ''
+    st.markdown(
+        f'<div style="display:inline-flex;align-items:center;gap:8px;'
+        f'background:{_bg};border:1px solid {_c}55;border-radius:20px;'
+        f'padding:4px 12px;margin-bottom:10px;font-size:12.5px;color:{_c};font-weight:600" '
+        f'title="Nasdaq-100 market state — the diary\'s worse-entry regime needs this weak AND the sector rolling over">'
+        f'<span style="font-size:14px">{_arrow}</span> QQQ {_lbl}'
+        f'&nbsp;<span style="color:#8b949e;font-weight:400;font-size:11px">{_px}</span></div>',
+        unsafe_allow_html=True,
+    )
+
 # Newsletter page — render and stop before screener code
 if _page == "📧 Alex's Picks":
     _render_newsletter_page(_selected_newsletter_date)
@@ -2406,15 +2425,68 @@ else:
 # Info strips below chart
 rr = display.get("risk_reward")
 rs = display.get("rs_rank")
+_srs = (sig.get("signals") or {}).get("sector_rs") or {}
+_srs_rank = _srs.get("rank")
+_srs_sector = _srs.get("sector_name") or _srs.get("sector_etf")
 st.markdown('<div class="strip-label">Trade levels</div>', unsafe_allow_html=True)
 st.markdown(strip_html([
     ("Entry",   _price_fmt(sig, display.get("entry_price"))),
     ("Stop",    _price_fmt(sig, display.get("stop_price"))),
     ("Target",  _price_fmt(sig, display.get("target_price"))),
     ("R / R",   f'<span class="white">{rr:.1f}×</span>' if rr else '<span class="grey">—</span>'),
-    ("RS Rank", f'<span class="white">{rs:.0f}</span><span class="grey" style="font-size:10px">th</span>'
+    ("RS · market", f'<span class="white">{rs:.0f}</span><span class="grey" style="font-size:10px">th</span>'
                 if rs else '<span class="grey">—</span>'),
+    ("RS · sector",
+     (f'<span class="white">{_srs_rank:.0f}</span><span class="grey" style="font-size:10px">th</span>'
+      + (f'<span class="grey" style="font-size:10px"> · {_srs_sector}</span>' if _srs_sector else ""))
+     if _srs_rank is not None else '<span class="grey">—</span>'),
 ]), unsafe_allow_html=True)
+
+# ── Market & sector regime (QQQ state + this stock's sector 20d slope) ────────
+# _reg is the cached entry-regime computed once at the top of the main body.
+if _reg and _reg.get("market_weak") is not None:
+    from dashboard.market import entry_regime_flag
+    _sec_etf = _srs.get("sector_etf")
+    _rf = entry_regime_flag(_sec_etf, _reg)
+    _qc, _qs = _reg.get("qqq_close"), _reg.get("qqq_sma50")
+
+    _mkt_html = ('<span style="color:#f85149">↓ below 50d</span>' if _rf["market_weak"]
+                 else '<span style="color:#3fb950">↑ above 50d</span>')
+    if _qc and _qs:
+        _mkt_html += f'<span class="grey" style="font-size:10px"> {_qc:.0f}/{_qs:.0f}</span>'
+
+    _slope = _rf.get("sector_slope")
+    if _sec_etf and _slope is not None:
+        _sc_col = "#f85149" if _rf["sector_weak"] else "#3fb950"
+        _arrow  = "↓" if _slope < 0 else "↑"
+        _sec_html = (f'<span style="color:{_sc_col}">{_arrow} {_slope * 100:+.2f}%/d</span>'
+                     f'<span class="grey" style="font-size:10px"> {_srs_sector or _sec_etf}</span>')
+    elif _sec_etf:
+        _sec_html = f'<span class="grey">— {_srs_sector or _sec_etf}</span>'
+    else:
+        _sec_html = '<span class="grey">— (US signals, after next run)</span>'
+
+    if _rf["unfavorable"]:
+        _verdict = '<span style="color:#f85149;font-weight:700">⚠️ Unfavorable</span>'
+    elif _sec_etf and _slope is not None:
+        _verdict = '<span style="color:#3fb950">✓ OK</span>'
+    else:
+        _verdict = '<span class="grey">—</span>'
+
+    st.markdown('<div class="strip-label" style="margin-top:10px">Market &amp; sector regime</div>',
+                unsafe_allow_html=True)
+    st.markdown(strip_html([
+        ("QQQ · market",      _mkt_html),
+        ("Sector 20d slope",  _sec_html),
+        ("Entry regime",      _verdict),
+    ]), unsafe_allow_html=True)
+    if _rf["unfavorable"]:
+        st.markdown(
+            '<div style="color:#8b949e;font-size:11px;padding:4px 2px;line-height:1.5">'
+            'Market weak (QQQ &lt; 50d) <b>and</b> this sector rolling over (20d SMA '
+            'sloping &lt; −0.2%/day) — the regime your diary flagged as producing worse entries.</div>',
+            unsafe_allow_html=True,
+        )
 
 # ── Ignition fingerprint (only when the Ignition strategy fired) ──────────────
 _ign = (sig.get("signals") or {}).get("ignition") or {}
